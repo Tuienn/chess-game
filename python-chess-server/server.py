@@ -1,14 +1,19 @@
 import os
 import asyncio
 import logging
-import random
-import string
 import time
 from typing import Dict, List, Optional, TypedDict, Literal
 
 import socketio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# --- Optional chess/engine (for PVP validation and AI) ---
+import chess
+import chess.engine
+
+from dotenv import load_dotenv
+load_dotenv()
 
 # ----------------------------
 # Logging
@@ -49,15 +54,20 @@ class RoomState(TypedDict):
 # Server state (in-memory)
 # ----------------------------
 rooms: Dict[str, RoomState] = {}
-# Map sid -> membership
 memberships: Dict[str, Dict[str, str]] = {}
+boards: Dict[str, chess.Board] = {}
+
+# Engine Stockfish (global) + lock
+ENGINE_SKILL = int(os.environ.get("STOCKFISH_SKILL", "16"))
+STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", r"C:\Tools\stockfish\stockfish.exe")
+ENGINE_LOCK = asyncio.Lock()
+engine: Optional[chess.engine.SimpleEngine] = None
 
 # ----------------------------
 # FastAPI + Socket.IO (ASGI)
 # ----------------------------
 app = FastAPI(title="Chess Server (Python)")
 
-# CORS giống origin: "*"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -83,66 +93,76 @@ def now_ms() -> float:
 
 def gen_code() -> str:
     """Generate a six character uppercase room code."""
-    return "".join(random.choice(string.ascii_uppercase) for _ in range(6))
+    import secrets, string as _s
+    return "".join(secrets.choice(_s.ascii_uppercase) for _ in range(6))
 
 def initial_state() -> GameState:
-    return {
-        "lastMove": None,
-        "boardFEN": "startpos",
-    }
+    return {"lastMove": None, "boardFEN": "startpos"}
 
 def create_room(code: str) -> RoomState:
-    return {
+    room: RoomState = {
         "code": code,
         "players": [],
         "state": initial_state(),
         "sideToMove": "WHITE",
         "lastActive": now_ms(),
     }
+    boards[code] = chess.Board()
+    return room
 
-def validate_move_payload(move: dict):
-    # Map field 'from' của JS sang 'from_' trong Python cho TypedDict
-    if "from" in move and "from_" not in move:
-        move["from_"] = move["from"]
-    if not isinstance(move.get("from_"), int) or not isinstance(move.get("to"), int):
-        raise ValueError("Move coordinates must be integers")
-    f, t = move["from_"], move["to"]
-    if f < 0 or f > 63 or t < 0 or t > 63:
-        raise ValueError("Squares must be between 0 and 63")
-    if f == t:
-        raise ValueError("From and to squares must differ")
+PROMO_MAP = {"Q": chess.QUEEN, "R": chess.ROOK, "B": chess.BISHOP, "N": chess.KNIGHT}
+REV_PROMO_MAP = {v: k for k, v in PROMO_MAP.items()}
 
-    promo = move.get("promo", None)
-    if promo is not None and promo not in ("Q", "R", "B", "N"):
-        raise ValueError("Promotion piece must be Q, R, B, or N")
-
-    for flag in ("isCastle", "isEnPassant", "isDoublePawnPush"):
-        if flag in move and not isinstance(move[flag], bool):
-            raise ValueError(f"{flag} must be boolean")
-
-def validate_legal_move(state: GameState, move: ChessMove) -> bool:
-    # Placeholder như bản JS (chưa validate luật cờ thật)
-    return True
-
-def apply_move_server(room: RoomState, move: ChessMove):
-    room["state"]["lastMove"] = {
-        "from_": move["from_"],
-        "to": move["to"],
-        "promo": move.get("promo") or None,
-        "isCastle": move.get("isCastle") or False,
-        "isEnPassant": move.get("isEnPassant") or False,
-        "isDoublePawnPush": move.get("isDoublePawnPush") or False,
+def move_dict_from_chess_move(m: chess.Move, board: chess.Board) -> ChessMove:
+    md: ChessMove = {
+        "from_": m.from_square,
+        "to": m.to_square,
+        "promo": None,
+        "isCastle": False,
+        "isEnPassant": False,
+        "isDoublePawnPush": False,
     }
-    room["sideToMove"] = "BLACK" if room["sideToMove"] == "WHITE" else "WHITE"
+    if m.promotion:
+        md["promo"] = REV_PROMO_MAP.get(m.promotion)
+    # Heuristic castle detection: king moves two files
+    piece = board.piece_at(m.from_square)
+    if piece and piece.piece_type == chess.KING:
+        if abs(chess.square_file(m.from_square) - chess.square_file(m.to_square)) == 2:
+            md["isCastle"] = True
+    return md
+
+def apply_player_move_to_board(board: chess.Board, mv: dict) -> chess.Move:
+    src = mv.get("from_") if "from_" in mv else mv.get("from")
+    dst = mv.get("to")
+    promo = mv.get("promo")
+    if not isinstance(src, int) or not isinstance(dst, int):
+        raise ValueError("Move 'from'/'to' must be integers [0..63]")
+
+    promotion = None
+    if promo:
+        if promo not in PROMO_MAP:
+            raise ValueError("Invalid promotion piece (use one of Q,R,B,N)")
+        promotion = PROMO_MAP[promo]
+
+    m = chess.Move(src, dst, promotion=promotion)
+    if m not in board.legal_moves:
+        raise ValueError("Illegal move")
+    board.push(m)
+    return m
 
 async def emit_room_state(room: RoomState):
+    code = room["code"]
+    board = boards.get(code)
+    # Luôn cập nhật FEN thực từ board (nếu có)
+    if board:
+        room["state"]["boardFEN"] = board.fen()
     payload = {
-        "code": room["code"],
+        "code": code,
         "players": [{"uid": p["uid"], "color": p["color"]} for p in room["players"]],
         "sideToMove": room["sideToMove"],
         "state": room["state"],
     }
-    await sio.emit("room_state", payload, room=room["code"])
+    await sio.emit("room_state", payload, room=code)
 
 async def remove_membership_and_update_room(sid: str):
     membership = memberships.get(sid)
@@ -155,12 +175,11 @@ async def remove_membership_and_update_room(sid: str):
         memberships.pop(sid, None)
         return
 
-    # Chỉ xóa player nếu sid rời trùng với socket hiện tại của player (tránh vụ reconnect)
+    # Chỉ xóa player nếu sid rời trùng với socket hiện tại của player (tránh reconnect)
     idx = next((i for i, p in enumerate(room["players"]) if p["uid"] == uid), -1)
     if idx != -1:
         player = room["players"][idx]
         if player["socketId"] != sid:
-            # Đây là disconnect cũ (stale), bỏ qua
             memberships.pop(sid, None)
             return
         room["players"].pop(idx)
@@ -168,24 +187,30 @@ async def remove_membership_and_update_room(sid: str):
         await emit_room_state(room)
 
     if len(room["players"]) == 0:
-        # Reset lại nếu phòng trống
+        # Reset room & board khi trống
         room["sideToMove"] = "WHITE"
         room["state"] = initial_state()
+        boards[code] = chess.Board()
 
     memberships.pop(sid, None)
 
 # ----------------------------
 # REST: POST /room
 # ----------------------------
+from fastapi import HTTPException
+
 @app.post("/room")
 async def create_room_endpoint():
     # tạo mã code duy nhất
+    tries = 0
     code = gen_code()
     while code in rooms:
         code = gen_code()
+        tries += 1
+        if tries > 100:
+            raise HTTPException(500, "Cannot allocate room code")
     rooms[code] = create_room(code)
-    log.info(f"[DEBUG] Room created: {code}")
-    log.info(f"[DEBUG] Total active rooms: {len(rooms)}")
+    log.info(f"[DEBUG] Room created: {code} (total={len(rooms)})")
     return {"code": code}
 
 # ----------------------------
@@ -198,7 +223,6 @@ async def connect(sid, environ, auth):
 @sio.event
 async def join_room(sid, payload):
     try:
-        log.info(f"[DEBUG] Join room request from {sid}: {payload}")
         if not isinstance(payload, dict):
             raise ValueError("Payload must be an object")
 
@@ -228,24 +252,19 @@ async def join_room(sid, payload):
         if existing:
             existing["socketId"] = sid
             player = existing
-            log.info(f"[DEBUG] Player {uid} reconnected to room {code} as {player['color']}")
+            log.info(f"[DEBUG] Player {uid} reconnected to {code} as {player['color']}")
         else:
             color: Color = "WHITE" if len(room["players"]) == 0 else "BLACK"
             player = {"uid": uid, "color": color, "socketId": sid}
             room["players"].append(player)
-            log.info(f"[DEBUG] Player {uid} joined room {code} as {color}")
+            log.info(f"[DEBUG] Player {uid} joined {code} as {color}")
 
         memberships[sid] = {"code": code, "uid": uid}
         await sio.enter_room(sid, code)
         room["lastActive"] = now_ms()
-        log.info(f"[DEBUG] Room {code} now has {len(room['players'])} players")
 
         # Gửi room_joined cho người mới vào
-        await sio.emit(
-            "room_joined",
-            {"code": room["code"], "color": player["color"].lower()},
-            to=sid,
-        )
+        await sio.emit("room_joined", {"code": room["code"], "color": player["color"].lower()}, to=sid)
 
         # Nếu là người thứ 2 (và không phải reconnect), thông báo cho người còn lại
         if not existing and len(room["players"]) == 2:
@@ -253,61 +272,175 @@ async def join_room(sid, payload):
             if other:
                 await sio.emit("opponent_joined", {}, to=other["socketId"])
 
+        # Đồng bộ state hiện tại
+        board = boards.get(code)
+        if board:
+            room["state"]["boardFEN"] = board.fen()
+            room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
+
         await emit_room_state(room)
 
     except Exception as e:
-        log.info(f"[DEBUG] Join room error for {sid}: {e}")
+        log.info(f"[DEBUG] join_room error for {sid}: {e}")
         await sio.emit("error_msg", {"message": str(e) or "Failed to join room"}, to=sid)
 
 @sio.event
 async def move(sid, payload):
+    """PVP move: enforce turn and legality using python-chess."""
     try:
-        log.info(f"[DEBUG] Move request from {sid}: {payload}")
         membership = memberships.get(sid)
         if not membership:
             raise ValueError("You are not joined to a room")
 
-        code = payload.get("code") if isinstance(payload, dict) else None
-        move_obj = payload.get("move") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            raise ValueError("Payload must be an object")
+
+        code: str = payload.get("code")
+        mv = payload.get("move")
 
         if not code or not isinstance(code, str):
             raise ValueError("Room code is required")
-        if membership["code"] != code:
-            raise ValueError("You are not part of this room")
-        if not isinstance(move_obj, dict):
+        if not isinstance(mv, dict):
             raise ValueError("Move payload is required")
 
         room = rooms.get(code)
-        if not room:
+        board = boards.get(code)
+        if not room or board is None:
             raise ValueError("Room not found")
 
         player = next((p for p in room["players"] if p["uid"] == membership["uid"]), None)
         if not player:
             raise ValueError("Player not found in room")
-        if player["color"] != room["sideToMove"]:
+
+        # Kiểm tra lượt
+        is_whites_turn = board.turn == chess.WHITE
+        if (player["color"] == "WHITE" and not is_whites_turn) or (player["color"] == "BLACK" and is_whites_turn):
             raise ValueError("Not your turn")
 
-        # Chuẩn hóa + validate move
-        if "from" in move_obj and "from_" not in move_obj:
-            move_obj["from_"] = move_obj["from"]
-        validate_move_payload(move_obj)
-        # Placeholder: luôn hợp lệ
-        if not validate_legal_move(room["state"], move_obj):  # pragma: no cover
-            raise ValueError("Illegal move")
+        # Áp dụng nước đi (hợp lệ)
+        if "from" in mv and "from_" not in mv:
+            mv["from_"] = mv["from"]
+        m = apply_player_move_to_board(board, mv)
 
-        apply_move_server(room, move_obj)  # cập nhật state + flip lượt
+        # Cập nhật state
+        room["state"]["lastMove"] = move_dict_from_chess_move(m, board)
+        room["state"]["boardFEN"] = board.fen()
+        room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
+        room["lastActive"] = now_ms()
 
         response = {
-            "move": move_obj,
+            "move": room["state"]["lastMove"],
             "sideToMove": room["sideToMove"],
             "state": room["state"],
         }
         await sio.emit("move_applied", response, room=code)
-        room["lastActive"] = now_ms()
 
     except Exception as e:
-        log.info(f"[DEBUG] Move error for {sid}: {e}")
+        log.info(f"[DEBUG] move error for {sid}: {e}")
         await sio.emit("error_msg", {"message": str(e) or "Failed to apply move"}, to=sid)
+
+@sio.event
+async def move_vs_ai(sid, payload):
+    """
+    Client -> Server:
+      { code: string, move: { from: number, to: number, promo?: "Q"|"R"|"B"|"N" }, level?: number, thinkTimeMs?: number }
+    Server -> Client ("ai_move"): see response below.
+    """
+    try:
+        if not isinstance(payload, dict):
+            raise ValueError("Payload must be an object")
+
+        code = payload.get("code")
+        mv = payload.get("move")
+        level = int(payload.get("level", ENGINE_SKILL))
+        think_ms = int(payload.get("thinkTimeMs", 300))
+
+        if not code or not isinstance(code, str):
+            raise ValueError("Room code is required")
+        if not isinstance(mv, dict):
+            raise ValueError("Move payload is required")
+
+        membership = memberships.get(sid)
+        if not membership or membership.get("code") != code:
+            raise ValueError("You are not joined to this room")
+
+        room = rooms.get(code)
+        board = boards.get(code)
+        if not room or board is None:
+            raise ValueError("Room not found")
+
+        # 1) Áp dụng nước đi của người chơi
+        if "from" in mv and "from_" not in mv:
+            mv["from_"] = mv["from"]
+        your_move = apply_player_move_to_board(board, mv)
+
+        room["state"]["boardFEN"] = board.fen()
+        room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board)
+        room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
+        room["lastActive"] = now_ms()
+
+        if board.is_game_over():
+            result = board.result(claim_draw=True)
+            await sio.emit("ai_move", {
+                "code": code,
+                "yourMove": room["state"]["lastMove"],
+                "aiMove": None,
+                "sideToMove": room["sideToMove"],
+                "state": room["state"],
+                "gameOver": {"result": result}
+            }, room=code)
+            return
+
+        # 2) Tính nước của Stockfish
+        global engine
+        if engine is None:
+            raise RuntimeError("Stockfish engine is not running. Set STOCKFISH_PATH correctly.")
+
+        async with ENGINE_LOCK:
+            try:
+                try:
+                    engine.configure({"Skill Level": level})
+                except Exception:
+                    pass
+                loop = asyncio.get_running_loop()
+                res = await loop.run_in_executor(
+                    None,
+                    lambda: engine.play(board, chess.engine.Limit(time=max(0.05, think_ms/1000.0)))
+                )
+            finally:
+                try:
+                    engine.configure({"Skill Level": ENGINE_SKILL})
+                except Exception:
+                    pass
+
+        # 3) Đẩy nước AI vào bàn cờ
+        if res.move is not None:
+            board.push(res.move)
+            ai_move_dict = move_dict_from_chess_move(res.move, board)
+        else:
+            ai_move_dict = None
+
+        room["state"]["boardFEN"] = board.fen()
+        room["state"]["lastMove"] = ai_move_dict or room["state"]["lastMove"]
+        room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
+        room["lastActive"] = now_ms()
+
+        game_over = None
+        if board.is_game_over():
+            game_over = {"result": board.result(claim_draw=True)}
+
+        await sio.emit("ai_move", {
+            "code": code,
+            "yourMove": move_dict_from_chess_move(your_move, board),
+            "aiMove": ai_move_dict,
+            "sideToMove": room["sideToMove"],
+            "state": room["state"],
+            "gameOver": game_over
+        }, room=code)
+
+    except Exception as e:
+        log.info(f"[DEBUG] move_vs_ai error for {sid}: {e}")
+        await sio.emit("error_msg", {"message": str(e) or "Failed to play vs AI"}, to=sid)
 
 @sio.event
 async def disconnect(sid):
@@ -329,6 +462,7 @@ async def cleanup_stale_rooms():
                     stale.append(code)
             for code in stale:
                 rooms.pop(code, None)
+                boards.pop(code, None)
                 log.info(f"[DEBUG] Cleaned stale room: {code}")
         except Exception as e:
             log.warning(f"[DEBUG] Cleanup error: {e}")
@@ -338,6 +472,31 @@ async def cleanup_stale_rooms():
 async def on_startup():
     # chạy task dọn phòng nền
     sio.start_background_task(cleanup_stale_rooms)
+
+    # Khởi động Stockfish nếu có
+    global engine
+    if not STOCKFISH_PATH or not os.path.exists(STOCKFISH_PATH):
+        log.warning("[DEBUG] STOCKFISH_PATH is missing or invalid. Set the path to stockfish.exe")
+    else:
+        try:
+            engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+            try:
+                engine.configure({"Skill Level": ENGINE_SKILL})
+            except Exception as e:
+                log.warning(f"[DEBUG] Cannot set 'Skill Level': {e}")
+            log.info(f"[DEBUG] Stockfish started at: {STOCKFISH_PATH} (Skill {ENGINE_SKILL})")
+        except Exception as e:
+            log.warning(f"[DEBUG] Failed to start Stockfish at {STOCKFISH_PATH}: {e}")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    global engine
+    if engine is not None:
+        try:
+            engine.quit()
+        except Exception:
+            pass
+        engine = None
 
 # ----------------------------
 # Run
