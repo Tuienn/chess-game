@@ -1,0 +1,61 @@
+# --- Python bytecode / cache ---
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Environments ---
+.venv/
+venv/
+env/
+.python-version  # pyenv
+
+# --- Packages / builds ---
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# --- Tests / coverage / tooling ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.hypothesis/
+junit.xml
+coverage.xml
+
+# --- Logs ---
+logs/
+*.log
+uvicorn.log
+
+# --- IDE / Editors ---
+.vscode/
+.idea/
+*.iml
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Jupyter (nếu có) ---
+.ipynb_checkpoints/
+
+# --- Env files (giữ lại .env.example) ---
+.env
+.env.*
+!.env.example
+
+# --- Misc editor backups ---
+*~
+*.swp
+*.swo
+
+_pycache_/
