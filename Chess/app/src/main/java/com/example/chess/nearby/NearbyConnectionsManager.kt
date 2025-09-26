@@ -5,6 +5,8 @@ import android.util.Log
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 import com.google.gson.Gson
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.example.chess.model.Move
 import com.example.chess.model.GameState
 import kotlinx.coroutines.channels.awaitClose
@@ -107,12 +109,12 @@ class NearbyConnectionsManager(private val context: Context) {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             val message = String(payload.asBytes()!!)
             Log.d("NearbyChess", "Received message: $message")
-            
-            try {
-                val nearbyMessage = gson.fromJson(message, NearbyMessage::class.java)
+
+            val nearbyMessage = parseNearbyMessage(message)
+            if (nearbyMessage != null) {
                 handleReceivedMessage(nearbyMessage)
-            } catch (e: Exception) {
-                Log.e("NearbyChess", "Error parsing message: $message", e)
+            } else {
+                Log.e("NearbyChess", "Failed to parse nearby message")
             }
         }
         
@@ -247,7 +249,7 @@ class NearbyConnectionsManager(private val context: Context) {
     
     private fun sendMessage(message: NearbyMessage, endpointId: String) {
         try {
-            val jsonString = gson.toJson(message)
+            val jsonString = encodeNearbyMessage(message)
             val payload = Payload.fromBytes(jsonString.toByteArray())
             
             connectionsClient.sendPayload(endpointId, payload)
@@ -280,6 +282,66 @@ class NearbyConnectionsManager(private val context: Context) {
                 Log.d("NearbyChess", "Received disconnect: ${message.reason}")
                 disconnect()
             }
+        }
+    }
+
+    private fun encodeNearbyMessage(message: NearbyMessage): String {
+        val json = JsonObject()
+        when (message) {
+            is NearbyMessage.ChessMove -> {
+                json.addProperty("type", "ChessMove")
+                json.add("move", gson.toJsonTree(message.move))
+            }
+            is NearbyMessage.GameSync -> {
+                json.addProperty("type", "GameSync")
+                json.add("gameState", gson.toJsonTree(message.gameState))
+            }
+            is NearbyMessage.PlayerReady -> {
+                json.addProperty("type", "PlayerReady")
+                json.addProperty("isReady", message.isReady)
+            }
+            is NearbyMessage.Disconnect -> {
+                json.addProperty("type", "Disconnect")
+                json.addProperty("reason", message.reason)
+            }
+        }
+        return gson.toJson(json)
+    }
+
+    private fun parseNearbyMessage(raw: String): NearbyMessage? {
+        return try {
+            val jsonElement = JsonParser.parseString(raw)
+            if (!jsonElement.isJsonObject) {
+                Log.e("NearbyChess", "Message is not a JSON object")
+                return null
+            }
+            val jsonObject = jsonElement.asJsonObject
+            val type = jsonObject.get("type")?.asString
+            when (type) {
+                "ChessMove" -> {
+                    val move = gson.fromJson(jsonObject.get("move"), Move::class.java)
+                    NearbyMessage.ChessMove(move)
+                }
+                "GameSync" -> {
+                    val gameState = gson.fromJson(jsonObject.get("gameState"), GameState::class.java)
+                    NearbyMessage.GameSync(gameState)
+                }
+                "PlayerReady" -> {
+                    val isReady = jsonObject.get("isReady")?.asBoolean ?: false
+                    NearbyMessage.PlayerReady(isReady)
+                }
+                "Disconnect" -> {
+                    val reason = jsonObject.get("reason")?.asString ?: "Unknown"
+                    NearbyMessage.Disconnect(reason)
+                }
+                else -> {
+                    Log.e("NearbyChess", "Unknown message type: $type")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("NearbyChess", "Error parsing nearby message", e)
+            null
         }
     }
     

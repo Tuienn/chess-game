@@ -254,8 +254,8 @@ private fun ChessBoardBitboardImpl(
         }
     }
 
-    // Xoay bàn khi online & bạn là đen
-    val shouldRotateBoard = isOnlineMode && playerColor == Side.BLACK
+    // Xoay bàn khi online hoặc nearby & bạn là đen
+    val shouldRotateBoard = (isOnlineMode || isNearbyMode) && playerColor == Side.BLACK
 
     fun rotateRowCol(r: Int, c: Int): Pair<Int, Int> =
         if (shouldRotateBoard) Pair(7 - r, 7 - c) else Pair(r, c)

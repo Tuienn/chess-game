@@ -283,12 +283,22 @@ class MainActivity : ComponentActivity() {
                             Screen.NearbyCreateGame -> NearbyCreateGameScreen(
                                 nearbyManager = nearbyManager,
                                 onBack = { screen = Screen.NearbyModeSelection },
-                                onGameStart = { screen = Screen.Game(isNearbyMode = true) }
+                                onGameStart = {
+                                    screen = Screen.Game(
+                                        playerColor = Side.WHITE,
+                                        isNearbyMode = true
+                                    )
+                                }
                             )
                             Screen.NearbyJoinGame -> NearbyJoinGameScreen(
                                 nearbyManager = nearbyManager,
                                 onBack = { screen = Screen.NearbyModeSelection },
-                                onGameStart = { screen = Screen.Game(isNearbyMode = true) }
+                                onGameStart = {
+                                    screen = Screen.Game(
+                                        playerColor = Side.BLACK,
+                                        isNearbyMode = true
+                                    )
+                                }
                             )
                         }
                     }

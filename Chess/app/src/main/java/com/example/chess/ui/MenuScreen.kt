@@ -43,8 +43,7 @@ fun MenuScreen(
 
         ) {
             Column(
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.padding(top = 100.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
                     text = "115,512 Playing Now",
