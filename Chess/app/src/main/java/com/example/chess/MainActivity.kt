@@ -1,8 +1,15 @@
 package com.example.chess
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
@@ -14,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import com.example.chess.model.initialBitboards
 import com.example.chess.model.Side
 import com.example.chess.network.ChessApiService
@@ -37,6 +45,30 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private const val DEFAULT_AI_LEVEL = 10
 private const val DEFAULT_AI_THINK_TIME_MS = 500
+
+private fun buildNearbyPermissions(): Array<String> {
+    val permissions = linkedSetOf<String>()
+    permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+    } else {
+        permissions.add(Manifest.permission.BLUETOOTH)
+        permissions.add(Manifest.permission.BLUETOOTH_ADMIN)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+    }
+    return permissions.toTypedArray()
+}
+
+private fun hasAllPermissions(context: Context, permissions: Array<String>): Boolean {
+    if (permissions.isEmpty()) return true
+    return permissions.all { permission ->
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    }
+}
 
 sealed class Screen {
     data object Menu : Screen()
@@ -83,6 +115,35 @@ class MainActivity : ComponentActivity() {
                     val socketService = remember { SocketService.getInstance() }
                     val nearbyManager = remember { NearbyConnectionsManager(this@MainActivity) }
                     var screen by remember { mutableStateOf<Screen>(Screen.Menu) }
+                    val activity = this@MainActivity
+                    val requiredNearbyPermissions = remember { buildNearbyPermissions() }
+                    var nearbyPermissionsGranted by remember {
+                        mutableStateOf(hasAllPermissions(activity, requiredNearbyPermissions))
+                    }
+                    val permissionLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.RequestMultiplePermissions()
+                    ) { result ->
+                        val allGranted = requiredNearbyPermissions.all { permission ->
+                            result[permission] == true ||
+                                ContextCompat.checkSelfPermission(activity, permission) == PackageManager.PERMISSION_GRANTED
+                        }
+                        nearbyPermissionsGranted = allGranted
+                        if (allGranted) {
+                            screen = Screen.NearbyModeSelection
+                        } else {
+                            Toast.makeText(
+                                activity,
+                                "Nearby permissions are required to create or join offline games.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+
+                    LaunchedEffect(screen) {
+                        if (screen == Screen.Menu) {
+                            nearbyPermissionsGranted = hasAllPermissions(activity, requiredNearbyPermissions)
+                        }
+                    }
                     
                     // Cleanup nearby manager when activity is destroyed
                     DisposableEffect(nearbyManager) {
@@ -190,7 +251,13 @@ class MainActivity : ComponentActivity() {
                                 onWatchGame = { screen = Screen.Watch },
                                 onPlayOnline = { modalState = ModalState.OnlinePlay },
                                 onPlayVsAi = { modalState = ModalState.AiSetup() },
-                                onPlayNearby = { screen = Screen.NearbyModeSelection }
+                                onPlayNearby = {
+                                    if (nearbyPermissionsGranted || requiredNearbyPermissions.isEmpty()) {
+                                        screen = Screen.NearbyModeSelection
+                                    } else {
+                                        permissionLauncher.launch(requiredNearbyPermissions)
+                                    }
+                                }
                             )
                             is Screen.Game -> ChessBoardBitboard(
                                 initial = initialBitboards(),

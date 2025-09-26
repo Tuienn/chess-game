@@ -20,7 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.widget.Toast
 import com.example.chess.nearby.NearbyConnectionsManager
 import com.example.chess.utils.NotificationHelper
 import com.example.chess.utils.P2PNotificationHandler
