@@ -25,6 +25,7 @@ fun MenuScreen(
     onGetStarted: () -> Unit,
     onWatchGame: () -> Unit,
     onPlayOnline: () -> Unit,
+    onPlayVsAi: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -95,6 +96,25 @@ fun MenuScreen(
                 ) {
                     Text(
                         text = "Play offline",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Button(
+                    onClick = onPlayVsAi,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF9B59B6),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text(
+                        text = "Play vs AI",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,

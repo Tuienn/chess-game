@@ -59,7 +59,7 @@ boards: Dict[str, chess.Board] = {}
 
 # Engine Stockfish (global) + lock
 ENGINE_SKILL = int(os.environ.get("STOCKFISH_SKILL", "16"))
-STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", r"C:\Tools\stockfish\stockfish.exe")
+STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", r"C:\Users\NC\Downloads\stockfish-windows-x86-64-avx2\stockfish\stockfish-windows-x86-64-avx2.exe")
 ENGINE_LOCK = asyncio.Lock()
 engine: Optional[chess.engine.SimpleEngine] = None
 
@@ -257,7 +257,14 @@ async def join_room(sid, payload):
             color: Color = "WHITE" if len(room["players"]) == 0 else "BLACK"
             player = {"uid": uid, "color": color, "socketId": sid}
             room["players"].append(player)
-            log.info(f"[DEBUG] Player {uid} joined {code} as {color}")
+            
+            # Check for AI game indicators
+            is_ai_game = uid.startswith("ai_") or len(room["players"]) == 1
+            game_type = "AI_GAME" if is_ai_game else "PVP_GAME"
+            log.info(f"[{game_type}] Player {uid} joined {code} as {color}")
+            
+            if is_ai_game:
+                log.info(f"[AI_GAME] Room {code} set up for human vs AI gameplay")
 
         memberships[sid] = {"code": code, "uid": uid}
         await sio.enter_room(sid, code)
@@ -355,10 +362,13 @@ async def move_vs_ai(sid, payload):
         level = int(payload.get("level", ENGINE_SKILL))
         think_ms = int(payload.get("thinkTimeMs", 300))
 
+        log.info(f"[AI_GAME] Player {sid} in room {code}: AI level={level}, think_time={think_ms}ms")
+
         if not code or not isinstance(code, str):
             raise ValueError("Room code is required")
-        if not isinstance(mv, dict):
-            raise ValueError("Move payload is required")
+
+        if mv is not None and not isinstance(mv, dict):
+            raise ValueError("Move payload must be an object when provided")
 
         membership = memberships.get(sid)
         if not membership or membership.get("code") != code:
@@ -369,21 +379,31 @@ async def move_vs_ai(sid, payload):
         if not room or board is None:
             raise ValueError("Room not found")
 
-        # 1) Áp dụng nước đi của người chơi
-        if "from" in mv and "from_" not in mv:
-            mv["from_"] = mv["from"]
-        your_move = apply_player_move_to_board(board, mv)
+        your_move = None
+        if mv is not None:
+            if "from" in mv and "from_" not in mv:
+                mv["from_"] = mv["from"]
+            your_move = apply_player_move_to_board(board, mv)
+            
+            # Log player move
+            from_square = chess.square_name(your_move.from_square)
+            to_square = chess.square_name(your_move.to_square)
+            promo_str = f" promo={your_move.promotion}" if your_move.promotion else ""
+            log.info(f"[AI_GAME] Player move in {code}: {from_square}-{to_square}{promo_str}")
 
-        room["state"]["boardFEN"] = board.fen()
-        room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board)
-        room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
-        room["lastActive"] = now_ms()
+            room["state"]["boardFEN"] = board.fen()
+            room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board)
+            room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
+            room["lastActive"] = now_ms()
+        else:
+            log.info(f"[AI_GAME] No player move provided in {code} - AI will make opening move")
 
         if board.is_game_over():
             result = board.result(claim_draw=True)
+            log.info(f"[AI_GAME] Game over in {code}: result={result}")
             await sio.emit("ai_move", {
                 "code": code,
-                "yourMove": room["state"]["lastMove"],
+                "yourMove": room["state"].get("lastMove"),
                 "aiMove": None,
                 "sideToMove": room["sideToMove"],
                 "state": room["state"],
@@ -395,6 +415,9 @@ async def move_vs_ai(sid, payload):
         global engine
         if engine is None:
             raise RuntimeError("Stockfish engine is not running. Set STOCKFISH_PATH correctly.")
+
+        log.info(f"[AI_GAME] Computing AI move for {code} at skill level {level}")
+        start_time = time.time()
 
         async with ENGINE_LOCK:
             try:
@@ -413,25 +436,40 @@ async def move_vs_ai(sid, payload):
                 except Exception:
                     pass
 
+        compute_time = (time.time() - start_time) * 1000
+        log.info(f"[AI_GAME] AI computation took {compute_time:.1f}ms for {code}")
+
         # 3) Đẩy nước AI vào bàn cờ
         if res.move is not None:
             board.push(res.move)
             ai_move_dict = move_dict_from_chess_move(res.move, board)
+            
+            # Log AI move
+            from_square = chess.square_name(res.move.from_square)
+            to_square = chess.square_name(res.move.to_square)
+            promo_str = f" promo={res.move.promotion}" if res.move.promotion else ""
+            log.info(f"[AI_GAME] AI move in {code}: {from_square}-{to_square}{promo_str}")
         else:
             ai_move_dict = None
+            log.warning(f"[AI_GAME] Stockfish returned no move for {code}")
 
         room["state"]["boardFEN"] = board.fen()
-        room["state"]["lastMove"] = ai_move_dict or room["state"]["lastMove"]
+        if ai_move_dict is not None:
+            room["state"]["lastMove"] = ai_move_dict
+        elif your_move is not None:
+            room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board)
         room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
         room["lastActive"] = now_ms()
 
         game_over = None
         if board.is_game_over():
             game_over = {"result": board.result(claim_draw=True)}
+            log.info(f"[AI_GAME] Game ended in {code}: result={game_over['result']}")
 
+        log.info(f"[AI_GAME] Sending ai_move response for {code}: next_turn={room['sideToMove']}")
         await sio.emit("ai_move", {
             "code": code,
-            "yourMove": move_dict_from_chess_move(your_move, board),
+            "yourMove": move_dict_from_chess_move(your_move, board) if your_move is not None else None,
             "aiMove": ai_move_dict,
             "sideToMove": room["sideToMove"],
             "state": room["state"],
@@ -439,7 +477,7 @@ async def move_vs_ai(sid, payload):
         }, room=code)
 
     except Exception as e:
-        log.info(f"[DEBUG] move_vs_ai error for {sid}: {e}")
+        log.error(f"[AI_GAME] Error in move_vs_ai for {sid} in room {code}: {e}")
         await sio.emit("error_msg", {"message": str(e) or "Failed to play vs AI"}, to=sid)
 
 @sio.event
@@ -476,17 +514,21 @@ async def on_startup():
     # Khởi động Stockfish nếu có
     global engine
     if not STOCKFISH_PATH or not os.path.exists(STOCKFISH_PATH):
-        log.warning("[DEBUG] STOCKFISH_PATH is missing or invalid. Set the path to stockfish.exe")
+        log.warning("[AI_ENGINE] STOCKFISH_PATH is missing or invalid. AI games will not be available.")
+        log.warning(f"[AI_ENGINE] Current path: {STOCKFISH_PATH}")
     else:
         try:
             engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
             try:
                 engine.configure({"Skill Level": ENGINE_SKILL})
+                log.info(f"[AI_ENGINE] Stockfish configured with default skill level {ENGINE_SKILL}")
             except Exception as e:
-                log.warning(f"[DEBUG] Cannot set 'Skill Level': {e}")
-            log.info(f"[DEBUG] Stockfish started at: {STOCKFISH_PATH} (Skill {ENGINE_SKILL})")
+                log.warning(f"[AI_ENGINE] Cannot set 'Skill Level': {e}")
+            log.info(f"[AI_ENGINE] ✅ Stockfish engine ready at: {STOCKFISH_PATH}")
+            log.info("[AI_ENGINE] 🤖 AI vs Human games are now available!")
         except Exception as e:
-            log.warning(f"[DEBUG] Failed to start Stockfish at {STOCKFISH_PATH}: {e}")
+            log.error(f"[AI_ENGINE] ❌ Failed to start Stockfish at {STOCKFISH_PATH}: {e}")
+            log.error("[AI_ENGINE] AI games will not be available until engine is fixed")
 
 @app.on_event("shutdown")
 async def on_shutdown():

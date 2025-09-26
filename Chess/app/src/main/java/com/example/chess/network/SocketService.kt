@@ -9,6 +9,14 @@ import java.net.URISyntaxException
 import com.example.chess.model.GameState
 import com.example.chess.model.Move
 
+data class AiMoveResult(
+    val code: String,
+    val yourMove: Move?,
+    val aiMove: Move?,
+    val sideToMove: String?,
+    val gameOverResult: String?
+)
+
 class SocketService {
     private var socket: Socket? = null
     private val serverUrl = "http://10.0.2.2:4001" // For Android emulator
@@ -21,6 +29,7 @@ class SocketService {
     private var onRoomJoinedCallback: ((String, String) -> Unit)? = null // (roomCode, playerColor)
     private var onOpponentJoinedCallback: (() -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
+    private var onAiMoveCallback: ((AiMoveResult) -> Unit)? = null
     
     companion object {
         private const val TAG = "SocketService"
@@ -62,6 +71,9 @@ class SocketService {
             }?.on("opponent_joined") { args ->
                 Log.d(TAG, "Opponent joined")
                 onOpponentJoinedCallback?.invoke()
+            }?.on("ai_move") { args ->
+                Log.d(TAG, "AI move received: ${args.getOrNull(0)}")
+                (args.getOrNull(0) as? JSONObject)?.let { handleAiMove(it) }
             }?.on("error_msg") { args ->
                 Log.e(TAG, "Server error: ${args[0]}")
                 val errorMsg = (args[0] as JSONObject).optString("message", "Unknown error")
@@ -137,20 +149,24 @@ class SocketService {
         onGameStateUpdateCallback = callback
     }
     
-    fun setOnMoveReceivedCallback(callback: (Move) -> Unit) {
+    fun setOnMoveReceivedCallback(callback: ((Move) -> Unit)?) {
         onMoveReceivedCallback = callback
     }
     
-    fun setOnRoomJoinedCallback(callback: (String, String) -> Unit) {
+    fun setOnRoomJoinedCallback(callback: ((String, String) -> Unit)?) {
         onRoomJoinedCallback = callback
     }
     
-    fun setOnOpponentJoinedCallback(callback: () -> Unit) {
+    fun setOnOpponentJoinedCallback(callback: (() -> Unit)?) {
         onOpponentJoinedCallback = callback
     }
     
-    fun setOnErrorCallback(callback: (String) -> Unit) {
+    fun setOnErrorCallback(callback: ((String) -> Unit)?) {
         onErrorCallback = callback
+    }
+
+    fun setOnAiMoveCallback(callback: ((AiMoveResult) -> Unit)?) {
+        onAiMoveCallback = callback
     }
     
     // Private event handlers
@@ -166,35 +182,13 @@ class SocketService {
     
     private fun handleMoveApplied(data: JSONObject) {
         try {
-            val moveObj = data.getJSONObject("move")
-            val from = when {
-                moveObj.has("from") && !moveObj.isNull("from") -> moveObj.getInt("from")
-                moveObj.has("from_") && !moveObj.isNull("from_") -> moveObj.getInt("from_")
-                else -> throw IllegalArgumentException("Move payload missing origin square")
-            }
-            val to = moveObj.getInt("to")
-            val promo = if (moveObj.has("promo") && !moveObj.isNull("promo")) {
-                moveObj.getString("promo").firstOrNull()
-            } else {
-                null
-            }
-            val isCastle = moveObj.optBoolean("isCastle", false)
-            val isEnPassant = moveObj.optBoolean("isEnPassant", false)
-            val isDoublePawnPush = moveObj.optBoolean("isDoublePawnPush", false)
+            val move = parseMoveFromJson(data.optJSONObject("move"))
+                ?: throw IllegalArgumentException("Move payload missing origin square")
 
-            val move = Move(
-                from = from,
-                to = to,
-                promo = promo,
-                isCastle = isCastle,
-                isEnPassant = isEnPassant,
-                isDoublePawnPush = isDoublePawnPush
-            )
-            
             Log.d(
                 TAG,
-                "Received move: from $from to $to, promo: $promo, " +
-                    "isCastle=$isCastle, isEnPassant=$isEnPassant, isDoublePawnPush=$isDoublePawnPush"
+                "Received move: from ${move.from} to ${move.to}, promo: ${move.promo}, " +
+                    "isCastle=${move.isCastle}, isEnPassant=${move.isEnPassant}, isDoublePawnPush=${move.isDoublePawnPush}"
             )
             onMoveReceivedCallback?.invoke(move)
         } catch (e: Exception) {
@@ -211,5 +205,100 @@ class SocketService {
         } catch (e: Exception) {
             Log.e(TAG, "Error handling room joined", e)
         }
+    }
+
+    private fun handleAiMove(data: JSONObject) {
+        try {
+            val code = data.optString("code")
+            val yourMove = parseMoveFromJson(data.optJSONObject("yourMove"))
+            val aiMove = parseMoveFromJson(data.optJSONObject("aiMove"))
+            val sideToMove = data.optString("sideToMove", null)
+            val gameOverResult = data.optJSONObject("gameOver")?.optString("result")
+
+            val result = AiMoveResult(
+                code = code,
+                yourMove = yourMove,
+                aiMove = aiMove,
+                sideToMove = sideToMove,
+                gameOverResult = gameOverResult
+            )
+            Log.d(TAG, "Parsed ai_move: $result")
+            onAiMoveCallback?.invoke(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling ai_move", e)
+        }
+    }
+
+    private fun parseMoveFromJson(moveObj: JSONObject?): Move? {
+        if (moveObj == null) return null
+        val from = when {
+            moveObj.has("from") && !moveObj.isNull("from") -> moveObj.getInt("from")
+            moveObj.has("from_") && !moveObj.isNull("from_") -> moveObj.getInt("from_")
+            else -> return null
+        }
+        val to = moveObj.getInt("to")
+        val promo = if (moveObj.has("promo") && !moveObj.isNull("promo")) {
+            moveObj.getString("promo").firstOrNull()
+        } else {
+            null
+        }
+        val isCastle = moveObj.optBoolean("isCastle", false)
+        val isEnPassant = moveObj.optBoolean("isEnPassant", false)
+        val isDoublePawnPush = moveObj.optBoolean("isDoublePawnPush", false)
+
+        return Move(
+            from = from,
+            to = to,
+            promo = promo,
+            isCastle = isCastle,
+            isEnPassant = isEnPassant,
+            isDoublePawnPush = isDoublePawnPush
+        )
+    }
+
+    fun sendMoveVsAi(
+        roomCode: String,
+        from: Int,
+        to: Int,
+        promo: String? = null,
+        level: Int,
+        thinkTimeMs: Int
+    ) {
+        if (!isConnected()) {
+            Log.w(TAG, "Socket not connected. Cannot send move_vs_ai.")
+            return
+        }
+
+        val moveData = JSONObject().apply {
+            put("from", from)
+            put("to", to)
+            promo?.let { put("promo", it) }
+        }
+
+        val payload = JSONObject().apply {
+            put("code", roomCode)
+            put("move", moveData)
+            put("level", level)
+            put("thinkTimeMs", thinkTimeMs)
+        }
+
+        Log.d(TAG, "Emitting move_vs_ai with payload: $payload")
+        socket?.emit("move_vs_ai", payload)
+    }
+
+    fun requestAiMove(roomCode: String, level: Int, thinkTimeMs: Int) {
+        if (!isConnected()) {
+            Log.w(TAG, "Socket not connected. Cannot request AI move.")
+            return
+        }
+
+        val payload = JSONObject().apply {
+            put("code", roomCode)
+            put("level", level)
+            put("thinkTimeMs", thinkTimeMs)
+        }
+
+        Log.d(TAG, "Requesting AI first move with payload: $payload")
+        socket?.emit("move_vs_ai", payload)
     }
 }

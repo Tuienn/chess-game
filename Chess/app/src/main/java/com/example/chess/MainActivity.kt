@@ -16,6 +16,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.example.chess.model.initialBitboards
 import com.example.chess.model.Side
+import com.example.chess.network.ChessApiService
+import com.example.chess.network.SocketService
+import com.example.chess.ui.AiPlayModal
 import com.example.chess.ui.ChessBoardBitboard
 import com.example.chess.ui.MenuScreen
 import com.example.chess.ui.WatchGameScreen
@@ -23,10 +26,24 @@ import com.example.chess.ui.OnlinePlayModal
 import com.example.chess.ui.CreateRoomModal
 import com.example.chess.ui.JoinRoomModal
 import com.example.chess.ui.ColorSelectionModal
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+
+private const val DEFAULT_AI_LEVEL = 10
+private const val DEFAULT_AI_THINK_TIME_MS = 500
 
 sealed class Screen {
     data object Menu : Screen()
-    data class Game(val playerColor: Side? = null, val isOnlineMode: Boolean = false, val roomCode: String? = null) : Screen()
+    data class Game(
+        val playerColor: Side? = null,
+        val isOnlineMode: Boolean = false,
+        val roomCode: String? = null,
+        val isAiMode: Boolean = false,
+        val aiLevel: Int = DEFAULT_AI_LEVEL,
+        val aiThinkTimeMs: Int = DEFAULT_AI_THINK_TIME_MS
+    ) : Screen()
     data object Watch : Screen()
 }
 
@@ -36,7 +53,17 @@ sealed class ModalState {
     data object ColorSelection : ModalState()
     data class CreateRoom(val selectedColor: String, val roomCode: String) : ModalState()
     data object JoinRoom : ModalState()
+    data class AiSetup(
+        val isProcessing: Boolean = false,
+        val errorMessage: String? = null
+    ) : ModalState()
 }
+
+data class AiGameConfig(
+    val color: Side,
+    val level: Int,
+    val thinkTimeMs: Int
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,9 +71,75 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
+                    val apiService = remember { ChessApiService.create() }
+                    val socketService = remember { SocketService.getInstance() }
                     var screen by remember { mutableStateOf<Screen>(Screen.Menu) }
                     var modalState by remember { mutableStateOf<ModalState>(ModalState.None) }
                     var currentRoomCode by remember { mutableStateOf<String?>(null) }
+                    var pendingAiConfig by remember { mutableStateOf<AiGameConfig?>(null) }
+
+                    LaunchedEffect(pendingAiConfig) {
+                        val config = pendingAiConfig ?: return@LaunchedEffect
+                        try {
+                            modalState = ModalState.AiSetup(isProcessing = true)
+
+                            if (!socketService.isConnected()) {
+                                socketService.connect()
+                            }
+
+                            val connected = withTimeoutOrNull(5_000) {
+                                while (!socketService.isConnected()) {
+                                    delay(100)
+                                }
+                                true
+                            }
+
+                            if (connected != true) {
+                                throw IllegalStateException("Unable to connect to chess server")
+                            }
+
+                            val response = apiService.createRoom()
+                            if (!response.isSuccessful) {
+                                throw IllegalStateException("Failed to create room (${response.code()})")
+                            }
+                            val roomCode = response.body()?.code ?: throw IllegalStateException("Server returned empty room code")
+                            currentRoomCode = roomCode
+
+                            val joinAck = CompletableDeferred<Unit>()
+                            socketService.setOnRoomJoinedCallback { code, _ ->
+                                if (code.equals(roomCode, ignoreCase = true) && !joinAck.isCompleted) {
+                                    joinAck.complete(Unit)
+                                }
+                            }
+
+                            val uid = "ai_${System.currentTimeMillis()}"
+                            socketService.joinRoom(roomCode, uid)
+
+                            withTimeout(5_000) {
+                                joinAck.await()
+                            }
+
+                            socketService.setOnRoomJoinedCallback(null)
+
+                            modalState = ModalState.None
+                            pendingAiConfig = null
+                            screen = Screen.Game(
+                                playerColor = config.color,
+                                isOnlineMode = true,
+                                roomCode = roomCode,
+                                isAiMode = true,
+                                aiLevel = config.level,
+                                aiThinkTimeMs = config.thinkTimeMs
+                            )
+                        } catch (e: Exception) {
+                            socketService.setOnRoomJoinedCallback(null)
+                            pendingAiConfig = null
+                            modalState = ModalState.AiSetup(
+                                isProcessing = false,
+                                errorMessage = e.message ?: "Unable to start AI game"
+                            )
+                        }
+                    }
 
                     AnimatedContent(
                         targetState = screen,
@@ -72,7 +165,8 @@ class MainActivity : ComponentActivity() {
                             Screen.Menu -> MenuScreen(
                                 onGetStarted = { screen = Screen.Game() }, // Offline mode
                                 onWatchGame = { screen = Screen.Watch },
-                                onPlayOnline = { modalState = ModalState.OnlinePlay }
+                                onPlayOnline = { modalState = ModalState.OnlinePlay },
+                                onPlayVsAi = { modalState = ModalState.AiSetup() }
                             )
                             is Screen.Game -> ChessBoardBitboard(
                                 initial = initialBitboards(),
@@ -80,6 +174,9 @@ class MainActivity : ComponentActivity() {
                                 playerColor = currentScreen.playerColor,
                                 isOnlineMode = currentScreen.isOnlineMode,
                                 roomCode = currentScreen.roomCode,
+                                isAiMode = currentScreen.isAiMode,
+                                aiLevel = currentScreen.aiLevel,
+                                aiThinkTimeMs = currentScreen.aiThinkTimeMs,
                                 modifier = Modifier.fillMaxSize()
                             )
                             Screen.Watch -> WatchGameScreen(
@@ -131,6 +228,24 @@ class MainActivity : ComponentActivity() {
                                 screen = Screen.Game(playerColor = Side.BLACK, isOnlineMode = true, roomCode = roomCode)
                             }
                         )
+                        is ModalState.AiSetup -> {
+                            val state = modalState as ModalState.AiSetup
+                            AiPlayModal(
+                                isProcessing = state.isProcessing,
+                                errorMessage = state.errorMessage,
+                                onDismiss = { if (!state.isProcessing) modalState = ModalState.None },
+                                onStartGame = { selectedSide, aiLevel, thinkTimeMs ->
+                                    if (!state.isProcessing) {
+                                        modalState = ModalState.AiSetup(isProcessing = true)
+                                        pendingAiConfig = AiGameConfig(
+                                            color = selectedSide,
+                                            level = aiLevel,
+                                            thinkTimeMs = thinkTimeMs
+                                        )
+                                    }
+                                }
+                            )
+                        }
                         ModalState.None -> {}
                     }
                 }

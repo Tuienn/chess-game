@@ -59,6 +59,7 @@ dependencies {
     
     // Socket.IO client
     implementation("io.socket:socket.io-client:2.1.0")
+    implementation(libs.androidx.foundation)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

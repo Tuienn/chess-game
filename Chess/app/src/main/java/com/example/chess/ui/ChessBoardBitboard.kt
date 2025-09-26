@@ -59,12 +59,25 @@ fun ChessBoardBitboard(
     modifier: Modifier = Modifier,
     playerColor: Side? = null, // null = both sides can move (offline), WHITE/BLACK = only that side can move (online)
     isOnlineMode: Boolean = false, // để xác định có xoay bàn cờ không
-    roomCode: String? = null // room code for online play
+    roomCode: String? = null, // room code for online play
+    isAiMode: Boolean = false,
+    aiLevel: Int = 10,
+    aiThinkTimeMs: Int = 500
 ) {
     var gameState by remember { 
         mutableStateOf(GameState(boards = initial, sideToMove = Side.WHITE)) 
     }
-    ChessBoardBitboardImpl(gameState, onBack, modifier, playerColor, isOnlineMode, roomCode) { gameState = it }
+    ChessBoardBitboardImpl(
+        gameState = gameState,
+        onBack = onBack,
+        modifier = modifier,
+        playerColor = playerColor,
+        isOnlineMode = isOnlineMode,
+        roomCode = roomCode,
+        isAiMode = isAiMode,
+        aiLevel = aiLevel,
+        aiThinkTimeMs = aiThinkTimeMs
+    ) { gameState = it }
 }
 
 /**
@@ -78,10 +91,23 @@ fun ChessBoardBitboard(
     modifier: Modifier = Modifier,
     playerColor: Side? = null,
     isOnlineMode: Boolean = false,
-    roomCode: String? = null
+    roomCode: String? = null,
+    isAiMode: Boolean = false,
+    aiLevel: Int = 10,
+    aiThinkTimeMs: Int = 500
 ) {
     var gameState by remember { mutableStateOf(initialState) }
-    ChessBoardBitboardImpl(gameState, onBack, modifier, playerColor, isOnlineMode, roomCode) { gameState = it }
+    ChessBoardBitboardImpl(
+        gameState = gameState,
+        onBack = onBack,
+        modifier = modifier,
+        playerColor = playerColor,
+        isOnlineMode = isOnlineMode,
+        roomCode = roomCode,
+        isAiMode = isAiMode,
+        aiLevel = aiLevel,
+        aiThinkTimeMs = aiThinkTimeMs
+    ) { gameState = it }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,6 +119,9 @@ private fun ChessBoardBitboardImpl(
     playerColor: Side? = null,
     isOnlineMode: Boolean = false,
     roomCode: String? = null,
+    isAiMode: Boolean = false,
+    aiLevel: Int = 10,
+    aiThinkTimeMs: Int = 500,
     onGameStateChange: (GameState) -> Unit
 ) {
     val context = LocalContext.current
@@ -104,17 +133,22 @@ private fun ChessBoardBitboardImpl(
     
     // Socket service for online play
     val socketService = remember { if (isOnlineMode) SocketService.getInstance() else null }
+    val isAiGame = isOnlineMode && isAiMode
+    var aiFirstMoveRequested by remember(roomCode) { mutableStateOf(false) }
     
     // Debug log for socket service initialization
-    LaunchedEffect(isOnlineMode, roomCode) {
-        Log.d("ChessBoard", "ChessBoard init: isOnlineMode=$isOnlineMode, roomCode=$roomCode, socketService=${socketService != null}")
+    LaunchedEffect(isOnlineMode, roomCode, isAiGame) {
+        Log.d(
+            "ChessBoard",
+            "ChessBoard init: isOnlineMode=$isOnlineMode, isAiGame=$isAiGame, roomCode=$roomCode, socketService=${socketService != null}"
+        )
         if (socketService != null) {
             Log.d("ChessBoard", "Socket connected: ${socketService.isConnected()}")
         }
     }
     
     // Setup socket listeners for online play
-    LaunchedEffect(socketService, isOnlineMode) {
+    LaunchedEffect(socketService, isOnlineMode, isAiGame) {
         if (isOnlineMode && socketService != null) {
             // Ensure socket is connected
             if (!socketService.isConnected()) {
@@ -122,15 +156,63 @@ private fun ChessBoardBitboardImpl(
                 socketService.connect()
                 kotlinx.coroutines.delay(2000) // Wait for connection
             }
-            
-            socketService.setOnMoveReceivedCallback { receivedMove ->
-                // Apply received move from opponent
-                Log.d("ChessBoard", "Received move from opponent: ${receivedMove.from} -> ${receivedMove.to}")
-                val currentState = latestGameState.value
-                val status = getGameStatus(currentState)
-                val isGameEnd = status == GameStatus.CHECKMATE || status == GameStatus.STALEMATE
-                val updatedState = applyMove(currentState, receivedMove, soundManager, isGameEnd)
-                latestOnGameStateChange.value(updatedState)
+
+            if (isAiGame) {
+                socketService.setOnMoveReceivedCallback(null)
+                socketService.setOnAiMoveCallback { result ->
+                    result.aiMove?.let { aiMove ->
+                        Log.d("ChessBoard", "AI move applied: ${aiMove.from} -> ${aiMove.to}")
+                        val currentState = latestGameState.value
+                        val status = getGameStatus(currentState)
+                        val isGameEnd = status == GameStatus.CHECKMATE || status == GameStatus.STALEMATE
+                        val updatedState = applyMove(currentState, aiMove, soundManager, isGameEnd)
+                        latestOnGameStateChange.value(updatedState)
+                    }
+
+                    result.gameOverResult?.let { outcome ->
+                        Log.d("ChessBoard", "Game over vs AI: $outcome")
+                    }
+                }
+            } else {
+                socketService.setOnAiMoveCallback(null)
+                socketService.setOnMoveReceivedCallback { receivedMove ->
+                    // Apply received move from opponent
+                    Log.d("ChessBoard", "Received move from opponent: ${receivedMove.from} -> ${receivedMove.to}")
+                    val currentState = latestGameState.value
+                    val status = getGameStatus(currentState)
+                    val isGameEnd = status == GameStatus.CHECKMATE || status == GameStatus.STALEMATE
+                    val updatedState = applyMove(currentState, receivedMove, soundManager, isGameEnd)
+                    latestOnGameStateChange.value(updatedState)
+                }
+            }
+        }
+    }
+    DisposableEffect(socketService, isOnlineMode) {
+        onDispose {
+            if (isOnlineMode && socketService != null) {
+                socketService.setOnMoveReceivedCallback(null)
+                socketService.setOnAiMoveCallback(null)
+            }
+        }
+    }
+
+    LaunchedEffect(isAiGame, playerColor, roomCode, socketService, aiLevel, aiThinkTimeMs) {
+        if (isAiGame && playerColor == Side.BLACK && roomCode != null && socketService != null && !aiFirstMoveRequested) {
+            if (!socketService.isConnected()) {
+                socketService.connect()
+                kotlinx.coroutines.delay(500)
+            }
+
+            var attempts = 0
+            while (!socketService.isConnected() && attempts < 30) {
+                kotlinx.coroutines.delay(100)
+                attempts++
+            }
+
+            if (socketService.isConnected()) {
+                Log.d("ChessBoard", "Requesting AI opening move for room=$roomCode")
+                socketService.requestAiMove(roomCode, aiLevel, aiThinkTimeMs)
+                aiFirstMoveRequested = true
             }
         }
     }
@@ -192,8 +274,14 @@ private fun ChessBoardBitboardImpl(
                 Log.d("ChessBoard", "Move check: isOnlineMode=$isOnlineMode, socketService=${socketService != null}, roomCode=$roomCode, connected=${socketService?.isConnected()}")
                 if (isOnlineMode && socketService != null && roomCode != null) {
                     if (socketService.isConnected()) {
-                        socketService.sendMove(roomCode, move.from, move.to, move.promo?.toString())
-                        Log.d("ChessBoard", "Sent move to server: ${move.from} -> ${move.to}")
+                        val promo = move.promo?.toString()
+                        if (isAiGame) {
+                            socketService.sendMoveVsAi(roomCode, move.from, move.to, promo, aiLevel, aiThinkTimeMs)
+                            Log.d("ChessBoard", "Sent move_vs_ai: ${move.from} -> ${move.to}, promo=$promo")
+                        } else {
+                            socketService.sendMove(roomCode, move.from, move.to, promo)
+                            Log.d("ChessBoard", "Sent move to server: ${move.from} -> ${move.to}")
+                        }
                     } else {
                         Log.w("ChessBoard", "Socket not connected, cannot send move")
                     }
@@ -219,8 +307,20 @@ private fun ChessBoardBitboardImpl(
             Log.d("ChessBoard", "Promotion move check: isOnlineMode=$isOnlineMode, socketService=${socketService != null}, roomCode=$roomCode, connected=${socketService?.isConnected()}")
             if (isOnlineMode && socketService != null && roomCode != null) {
                 if (socketService.isConnected()) {
-                    socketService.sendMove(roomCode, promotionMove.from, promotionMove.to, promotionMove.promo?.toString())
-                    Log.d("ChessBoard", "Sent promotion move to server: ${promotionMove.from} -> ${promotionMove.to}, promo: ${promotionMove.promo}")
+                    val promo = promotionMove.promo?.toString()
+                    if (isAiGame) {
+                        socketService.sendMoveVsAi(roomCode, promotionMove.from, promotionMove.to, promo, aiLevel, aiThinkTimeMs)
+                        Log.d(
+                            "ChessBoard",
+                            "Sent AI promotion move: ${promotionMove.from} -> ${promotionMove.to}, promo: ${promotionMove.promo}"
+                        )
+                    } else {
+                        socketService.sendMove(roomCode, promotionMove.from, promotionMove.to, promo)
+                        Log.d(
+                            "ChessBoard",
+                            "Sent promotion move to server: ${promotionMove.from} -> ${promotionMove.to}, promo: ${promotionMove.promo}"
+                        )
+                    }
                 } else {
                     Log.w("ChessBoard", "Socket not connected for promotion move")
                 }
@@ -350,8 +450,14 @@ private fun ChessBoardBitboardImpl(
                                 Log.d("ChessBoard", "Fallback move check: isOnlineMode=$isOnlineMode, socketService=${socketService != null}, roomCode=$roomCode, connected=${socketService?.isConnected()}")
                                 if (isOnlineMode && socketService != null && roomCode != null) {
                                     if (socketService.isConnected()) {
-                                        socketService.sendMove(roomCode, targetMove.from, targetMove.to, targetMove.promo?.toString())
-                                        Log.d("ChessBoard", "Sent fallback move to server: ${targetMove.from} -> ${targetMove.to}")
+                                        val promo = targetMove.promo?.toString()
+                                        if (isAiGame) {
+                                            socketService.sendMoveVsAi(roomCode, targetMove.from, targetMove.to, promo, aiLevel, aiThinkTimeMs)
+                                            Log.d("ChessBoard", "Sent AI fallback move: ${targetMove.from} -> ${targetMove.to}")
+                                        } else {
+                                            socketService.sendMove(roomCode, targetMove.from, targetMove.to, promo)
+                                            Log.d("ChessBoard", "Sent fallback move to server: ${targetMove.from} -> ${targetMove.to}")
+                                        }
                                     } else {
                                         Log.w("ChessBoard", "Socket not connected for fallback move")
                                     }
