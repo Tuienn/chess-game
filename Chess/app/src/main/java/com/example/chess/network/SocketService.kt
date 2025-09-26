@@ -167,17 +167,35 @@ class SocketService {
     private fun handleMoveApplied(data: JSONObject) {
         try {
             val moveObj = data.getJSONObject("move")
-            val from = moveObj.getInt("from")
+            val from = when {
+                moveObj.has("from") && !moveObj.isNull("from") -> moveObj.getInt("from")
+                moveObj.has("from_") && !moveObj.isNull("from_") -> moveObj.getInt("from_")
+                else -> throw IllegalArgumentException("Move payload missing origin square")
+            }
             val to = moveObj.getInt("to")
-            val promo = if (moveObj.has("promo")) moveObj.getString("promo").firstOrNull() else null
-            
+            val promo = if (moveObj.has("promo") && !moveObj.isNull("promo")) {
+                moveObj.getString("promo").firstOrNull()
+            } else {
+                null
+            }
+            val isCastle = moveObj.optBoolean("isCastle", false)
+            val isEnPassant = moveObj.optBoolean("isEnPassant", false)
+            val isDoublePawnPush = moveObj.optBoolean("isDoublePawnPush", false)
+
             val move = Move(
                 from = from,
                 to = to,
-                promo = promo
+                promo = promo,
+                isCastle = isCastle,
+                isEnPassant = isEnPassant,
+                isDoublePawnPush = isDoublePawnPush
             )
             
-            Log.d(TAG, "Received move: from $from to $to, promo: $promo")
+            Log.d(
+                TAG,
+                "Received move: from $from to $to, promo: $promo, " +
+                    "isCastle=$isCastle, isEnPassant=$isEnPassant, isDoublePawnPush=$isDoublePawnPush"
+            )
             onMoveReceivedCallback?.invoke(move)
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing move", e)
