@@ -51,6 +51,8 @@ dependencies {
     implementation(libs.androidx.ui.geometry)
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-gif:2.7.0")
+    // Google Play services Nearby (Connections API)
+    implementation("com.google.android.gms:play-services-nearby:19.1.0")
     
     // HTTP client for API calls
     implementation("com.squareup.retrofit2:retrofit:3.0.0")

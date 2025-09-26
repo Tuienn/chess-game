@@ -33,6 +33,7 @@ import com.example.chess.audio.ChessSoundManager
 import com.example.chess.audio.rememberChessSoundManager
 import com.example.chess.model.*
 import com.example.chess.network.SocketService
+import com.example.chess.utils.NotificationHelper
 
 /** Kiểm tra nước đi có phải tốt lên hàng cuối không */
 private fun needsPromotionForMove(state: GameState, move: Move): Boolean {
@@ -62,7 +63,9 @@ fun ChessBoardBitboard(
     roomCode: String? = null, // room code for online play
     isAiMode: Boolean = false,
     aiLevel: Int = 10,
-    aiThinkTimeMs: Int = 500
+    aiThinkTimeMs: Int = 500,
+    isNearbyMode: Boolean = false, // P2P mode using Nearby Connections
+    nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null
 ) {
     var gameState by remember { 
         mutableStateOf(GameState(boards = initial, sideToMove = Side.WHITE)) 
@@ -76,7 +79,9 @@ fun ChessBoardBitboard(
         roomCode = roomCode,
         isAiMode = isAiMode,
         aiLevel = aiLevel,
-        aiThinkTimeMs = aiThinkTimeMs
+        aiThinkTimeMs = aiThinkTimeMs,
+        isNearbyMode = isNearbyMode,
+        nearbyManager = nearbyManager
     ) { gameState = it }
 }
 
@@ -94,7 +99,9 @@ fun ChessBoardBitboard(
     roomCode: String? = null,
     isAiMode: Boolean = false,
     aiLevel: Int = 10,
-    aiThinkTimeMs: Int = 500
+    aiThinkTimeMs: Int = 500,
+    isNearbyMode: Boolean = false,
+    nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null
 ) {
     var gameState by remember { mutableStateOf(initialState) }
     ChessBoardBitboardImpl(
@@ -106,7 +113,9 @@ fun ChessBoardBitboard(
         roomCode = roomCode,
         isAiMode = isAiMode,
         aiLevel = aiLevel,
-        aiThinkTimeMs = aiThinkTimeMs
+        aiThinkTimeMs = aiThinkTimeMs,
+        isNearbyMode = isNearbyMode,
+        nearbyManager = nearbyManager
     ) { gameState = it }
 }
 
@@ -122,6 +131,8 @@ private fun ChessBoardBitboardImpl(
     isAiMode: Boolean = false,
     aiLevel: Int = 10,
     aiThinkTimeMs: Int = 500,
+    isNearbyMode: Boolean = false,
+    nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null,
     onGameStateChange: (GameState) -> Unit
 ) {
     val context = LocalContext.current
@@ -192,6 +203,44 @@ private fun ChessBoardBitboardImpl(
             if (isOnlineMode && socketService != null) {
                 socketService.setOnMoveReceivedCallback(null)
                 socketService.setOnAiMoveCallback(null)
+            }
+        }
+    }
+    
+    // P2P Nearby Connections setup
+    LaunchedEffect(isNearbyMode, nearbyManager) {
+        if (isNearbyMode && nearbyManager != null) {
+            Log.d("ChessBoard", "Setting up P2P callbacks")
+            
+            // Set callback for receiving moves from opponent
+            nearbyManager.setOnMoveReceivedCallback { move ->
+                Log.d("ChessBoard", "P2P move received: ${move.from} -> ${move.to}")
+                val currentState = latestGameState.value
+                val status = getGameStatus(currentState)
+                val isGameEnd = status == GameStatus.CHECKMATE || status == GameStatus.STALEMATE
+                val updatedState = applyMove(currentState, move, soundManager, isGameEnd)
+                latestOnGameStateChange.value(updatedState)
+                
+                // Optional: notify user that opponent made a move (can be disabled for less intrusive experience)
+                // NotificationHelper.showMoveReceived(context, enable = false)
+            }
+            
+            // Set callback for connection status changes
+            nearbyManager.setOnConnectionStatusChangedCallback { isConnected, message ->
+                if (!isConnected) {
+                    // Handle disconnection - show notification and could return to menu
+                    Log.d("ChessBoard", "P2P connection lost: $message")
+                    NotificationHelper.showConnectionLost(context, message)
+                }
+            }
+        }
+    }
+    
+    DisposableEffect(nearbyManager, isNearbyMode) {
+        onDispose {
+            if (isNearbyMode && nearbyManager != null) {
+                nearbyManager.setOnMoveReceivedCallback(null)
+                nearbyManager.setOnConnectionStatusChangedCallback(null)
             }
         }
     }
@@ -284,6 +333,13 @@ private fun ChessBoardBitboardImpl(
                         }
                     } else {
                         Log.w("ChessBoard", "Socket not connected, cannot send move")
+                }
+                
+                // Send move to P2P opponent if playing nearby
+                if (isNearbyMode && nearbyManager != null) {
+                    nearbyManager.sendMove(move)
+                    Log.d("ChessBoard", "Sent P2P move: ${move.from} -> ${move.to}")
+                }
                     }
                 } else {
                     Log.w("ChessBoard", "Cannot send move - missing requirements")
@@ -326,6 +382,12 @@ private fun ChessBoardBitboardImpl(
                 }
             } else {
                 Log.w("ChessBoard", "Cannot send promotion move - missing requirements")
+            }
+            
+            // Send promotion move to P2P opponent if playing nearby
+            if (isNearbyMode && nearbyManager != null) {
+                nearbyManager.sendMove(promotionMove)
+                Log.d("ChessBoard", "Sent P2P promotion move: ${promotionMove.from} -> ${promotionMove.to}, promo: ${promotionMove.promo}")
             }
             
             // Clear promotion state

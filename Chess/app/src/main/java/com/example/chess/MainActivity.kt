@@ -26,6 +26,10 @@ import com.example.chess.ui.OnlinePlayModal
 import com.example.chess.ui.CreateRoomModal
 import com.example.chess.ui.JoinRoomModal
 import com.example.chess.ui.ColorSelectionModal
+import com.example.chess.ui.NearbyModeSelectionScreen
+import com.example.chess.ui.NearbyCreateGameScreen
+import com.example.chess.ui.NearbyJoinGameScreen
+import com.example.chess.nearby.NearbyConnectionsManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
@@ -42,9 +46,13 @@ sealed class Screen {
         val roomCode: String? = null,
         val isAiMode: Boolean = false,
         val aiLevel: Int = DEFAULT_AI_LEVEL,
-        val aiThinkTimeMs: Int = DEFAULT_AI_THINK_TIME_MS
+        val aiThinkTimeMs: Int = DEFAULT_AI_THINK_TIME_MS,
+        val isNearbyMode: Boolean = false
     ) : Screen()
     data object Watch : Screen()
+    data object NearbyModeSelection : Screen()
+    data object NearbyCreateGame : Screen()
+    data object NearbyJoinGame : Screen()
 }
 
 sealed class ModalState {
@@ -73,7 +81,15 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) {
                     val apiService = remember { ChessApiService.create() }
                     val socketService = remember { SocketService.getInstance() }
+                    val nearbyManager = remember { NearbyConnectionsManager(this@MainActivity) }
                     var screen by remember { mutableStateOf<Screen>(Screen.Menu) }
+                    
+                    // Cleanup nearby manager when activity is destroyed
+                    DisposableEffect(nearbyManager) {
+                        onDispose {
+                            nearbyManager.cleanup()
+                        }
+                    }
                     var modalState by remember { mutableStateOf<ModalState>(ModalState.None) }
                     var currentRoomCode by remember { mutableStateOf<String?>(null) }
                     var pendingAiConfig by remember { mutableStateOf<AiGameConfig?>(null) }
@@ -166,7 +182,8 @@ class MainActivity : ComponentActivity() {
                                 onGetStarted = { screen = Screen.Game() }, // Offline mode
                                 onWatchGame = { screen = Screen.Watch },
                                 onPlayOnline = { modalState = ModalState.OnlinePlay },
-                                onPlayVsAi = { modalState = ModalState.AiSetup() }
+                                onPlayVsAi = { modalState = ModalState.AiSetup() },
+                                onPlayNearby = { screen = Screen.NearbyModeSelection }
                             )
                             is Screen.Game -> ChessBoardBitboard(
                                 initial = initialBitboards(),
@@ -177,10 +194,27 @@ class MainActivity : ComponentActivity() {
                                 isAiMode = currentScreen.isAiMode,
                                 aiLevel = currentScreen.aiLevel,
                                 aiThinkTimeMs = currentScreen.aiThinkTimeMs,
+                                isNearbyMode = currentScreen.isNearbyMode,
+                                nearbyManager = if (currentScreen.isNearbyMode) nearbyManager else null,
                                 modifier = Modifier.fillMaxSize()
                             )
                             Screen.Watch -> WatchGameScreen(
                                 onBack = { screen = Screen.Menu }
+                            )
+                            Screen.NearbyModeSelection -> NearbyModeSelectionScreen(
+                                onBack = { screen = Screen.Menu },
+                                onCreateGame = { screen = Screen.NearbyCreateGame },
+                                onJoinGame = { screen = Screen.NearbyJoinGame }
+                            )
+                            Screen.NearbyCreateGame -> NearbyCreateGameScreen(
+                                nearbyManager = nearbyManager,
+                                onBack = { screen = Screen.NearbyModeSelection },
+                                onGameStart = { screen = Screen.Game(isNearbyMode = true) }
+                            )
+                            Screen.NearbyJoinGame -> NearbyJoinGameScreen(
+                                nearbyManager = nearbyManager,
+                                onBack = { screen = Screen.NearbyModeSelection },
+                                onGameStart = { screen = Screen.Game(isNearbyMode = true) }
                             )
                         }
                     }
