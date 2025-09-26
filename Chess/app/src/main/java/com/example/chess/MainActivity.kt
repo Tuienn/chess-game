@@ -162,10 +162,17 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize(),
                         transitionSpec = {
                             val animationDuration = 400
-                            val slideDirection = when (targetState) {
-                                Screen.Menu -> -1 // Slide in from left when going back to menu
-                                is Screen.Game, Screen.Watch -> 1 // Slide in from right when going forward
+                            fun screenOrder(screen: Screen): Int = when (screen) {
+                                Screen.Menu -> 0
+                                Screen.NearbyModeSelection -> 1
+                                Screen.NearbyCreateGame, Screen.NearbyJoinGame -> 2
+                                Screen.Watch -> 2
+                                is Screen.Game -> 3
                             }
+
+                            val initialOrder = screenOrder(initialState)
+                            val targetOrder = screenOrder(targetState)
+                            val slideDirection = if (targetOrder >= initialOrder) 1 else -1
                             
                             slideInHorizontally(
                                 initialOffsetX = { fullWidth -> slideDirection * fullWidth },

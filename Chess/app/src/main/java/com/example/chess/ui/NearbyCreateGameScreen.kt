@@ -16,7 +16,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.widget.Toast
 import com.example.chess.nearby.NearbyConnectionsManager
 import com.example.chess.utils.NotificationHelper
 import com.example.chess.utils.P2PNotificationHandler
@@ -213,7 +212,7 @@ fun NearbyCreateGameScreen(
                             )
                             
                             Text(
-                                text = connectionState.message,
+                                text = (connectionState as NearbyConnectionsManager.ConnectionState.Error).message,
                                 color = Color.White.copy(alpha = 0.7f),
                                 fontSize = 14.sp,
                                 textAlign = TextAlign.Center

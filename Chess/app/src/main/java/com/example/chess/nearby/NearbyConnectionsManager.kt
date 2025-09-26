@@ -286,21 +286,21 @@ class NearbyConnectionsManager(private val context: Context) {
     /**
      * Set callback for when a move is received
      */
-    fun setOnMoveReceivedCallback(callback: (Move) -> Unit) {
+    fun setOnMoveReceivedCallback(callback: ((Move) -> Unit)?) {
         onMoveReceived = callback
     }
     
     /**
      * Set callback for when game state is received
      */
-    fun setOnGameStateReceivedCallback(callback: (GameState) -> Unit) {
+    fun setOnGameStateReceivedCallback(callback: ((GameState) -> Unit)?) {
         onGameStateReceived = callback
     }
     
     /**
      * Set callback for connection status changes
      */
-    fun setOnConnectionStatusChangedCallback(callback: (Boolean, String?) -> Unit) {
+    fun setOnConnectionStatusChangedCallback(callback: ((Boolean, String?) -> Unit)?) {
         onConnectionStatusChanged = callback
     }
     

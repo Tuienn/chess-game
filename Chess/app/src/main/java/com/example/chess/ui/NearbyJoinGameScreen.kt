@@ -220,7 +220,7 @@ fun NearbyJoinGameScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         
                         Text(
-                            text = connectionState.message,
+                            text = (connectionState as NearbyConnectionsManager.ConnectionState.Error).message,
                             color = Color(0xFFE74C3C),
                             fontSize = 14.sp
                         )
