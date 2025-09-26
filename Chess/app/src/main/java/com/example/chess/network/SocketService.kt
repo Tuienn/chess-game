@@ -11,8 +11,8 @@ import com.example.chess.model.Move
 
 class SocketService {
     private var socket: Socket? = null
-    private val serverUrl = "http://10.0.2.2:4000" // For Android emulator
-    // Use "http://localhost:4000" for physical device on same network
+    private val serverUrl = "http://10.0.2.2:4001" // For Android emulator
+    // Use "http://localhost:4001" for physical device on same network
     // or replace with your actual server IP
     
     // Callbacks for game events

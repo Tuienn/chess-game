@@ -83,7 +83,7 @@ sio = socketio.AsyncServer(
 )
 asgi_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
-PORT = int(os.environ.get("PORT", "4000"))
+PORT = int(os.environ.get("PORT", "4001"))
 
 # ----------------------------
 # Helpers
