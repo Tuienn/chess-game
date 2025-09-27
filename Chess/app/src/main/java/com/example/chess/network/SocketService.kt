@@ -19,7 +19,8 @@ data class AiMoveResult(
 
 class SocketService {
     private var socket: Socket? = null
-    private val serverUrl = "http://10.0.2.2:4001" // For Android emulator
+    // private val serverUrl = "http://10.0.2.2:4001"
+    private val serverUrl = "https://3ee88ba7d807.ngrok-free.app"
     // Use "http://localhost:4001" for physical device on same network
     // or replace with your actual server IP
     

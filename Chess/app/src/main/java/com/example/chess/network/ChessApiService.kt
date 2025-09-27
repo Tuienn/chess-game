@@ -16,7 +16,8 @@ interface ChessApiService {
     suspend fun createRoom(): Response<CreateRoomResponse>
     
     companion object {
-        private const val BASE_URL = "http://10.0.2.2:4001/" // Android emulator localhost
+        // private const val BASE_URL = "http://10.0.2.2:4001/" 
+        private const val BASE_URL = "https://3ee88ba7d807.ngrok-free.app" 
         
         fun create(): ChessApiService {
             val loggingInterceptor = HttpLoggingInterceptor().apply {
