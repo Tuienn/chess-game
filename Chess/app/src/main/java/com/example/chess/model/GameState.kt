@@ -17,7 +17,29 @@ data class Move(
     val isDoublePawnPush: Boolean = false
 )
 
-/** Trạng thái đầy đủ cho bộ sinh move “đúng luật” */
+/** Time control settings for chess clock */
+data class TimeControl(
+    val totalTimeMs: Long, // 1m=60000, 3m=180000, 5m=300000, 10m=600000, 30m=1800000
+    val enabled: Boolean = true
+) {
+    companion object {
+        val ONE_MINUTE = TimeControl(60_000, true)
+        val THREE_MINUTES = TimeControl(180_000, true)
+        val FIVE_MINUTES = TimeControl(300_000, true)
+        val TEN_MINUTES = TimeControl(600_000, true)
+        val THIRTY_MINUTES = TimeControl(1_800_000, true)
+        val NO_LIMIT = TimeControl(0, false)
+    }
+}
+
+/** Player timers for chess clock */
+data class PlayerTimers(
+    val whiteRemainingMs: Long,
+    val blackRemainingMs: Long,
+    val lastUpdateTimestamp: Long = System.currentTimeMillis()
+)
+
+/** Trạng thái đầy đủ cho bộ sinh move "đúng luật" */
 data class GameState(
     val boards: Bitboards,
     val sideToMove: Side = Side.WHITE,

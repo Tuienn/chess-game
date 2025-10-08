@@ -1,8 +1,15 @@
 package com.example.chess
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
@@ -14,8 +21,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import com.example.chess.model.initialBitboards
 import com.example.chess.model.Side
+import com.example.chess.model.TimeControl
+import com.example.chess.network.ChessApiService
+import com.example.chess.network.SocketService
+import com.example.chess.ui.AiPlayModal
 import com.example.chess.ui.ChessBoardBitboard
 import com.example.chess.ui.MenuScreen
 import com.example.chess.ui.WatchGameScreen
@@ -23,11 +35,58 @@ import com.example.chess.ui.OnlinePlayModal
 import com.example.chess.ui.CreateRoomModal
 import com.example.chess.ui.JoinRoomModal
 import com.example.chess.ui.ColorSelectionModal
+import com.example.chess.ui.NearbyModeSelectionScreen
+import com.example.chess.ui.NearbyCreateGameScreen
+import com.example.chess.ui.NearbyJoinGameScreen
+import com.example.chess.nearby.NearbyConnectionsManager
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+
+private const val DEFAULT_AI_LEVEL = 10
+private const val DEFAULT_AI_THINK_TIME_MS = 500
+
+private fun buildNearbyPermissions(): Array<String> {
+    val permissions = linkedSetOf<String>()
+    permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+    } else {
+        permissions.add(Manifest.permission.BLUETOOTH)
+        permissions.add(Manifest.permission.BLUETOOTH_ADMIN)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+    }
+    return permissions.toTypedArray()
+}
+
+private fun hasAllPermissions(context: Context, permissions: Array<String>): Boolean {
+    if (permissions.isEmpty()) return true
+    return permissions.all { permission ->
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    }
+}
 
 sealed class Screen {
     data object Menu : Screen()
-    data class Game(val playerColor: Side? = null, val isOnlineMode: Boolean = false, val roomCode: String? = null) : Screen()
+    data class Game(
+        val playerColor: Side? = null,
+        val isOnlineMode: Boolean = false,
+        val roomCode: String? = null,
+        val isAiMode: Boolean = false,
+        val aiLevel: Int = DEFAULT_AI_LEVEL,
+        val aiThinkTimeMs: Int = DEFAULT_AI_THINK_TIME_MS,
+        val isNearbyMode: Boolean = false,
+        val timeControl: TimeControl? = null
+    ) : Screen()
     data object Watch : Screen()
+    data object NearbyModeSelection : Screen()
+    data object NearbyCreateGame : Screen()
+    data object NearbyJoinGame : Screen()
 }
 
 sealed class ModalState {
@@ -36,7 +95,17 @@ sealed class ModalState {
     data object ColorSelection : ModalState()
     data class CreateRoom(val selectedColor: String, val roomCode: String) : ModalState()
     data object JoinRoom : ModalState()
+    data class AiSetup(
+        val isProcessing: Boolean = false,
+        val errorMessage: String? = null
+    ) : ModalState()
 }
+
+data class AiGameConfig(
+    val color: Side,
+    val level: Int,
+    val thinkTimeMs: Int
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,19 +113,131 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
+                    val apiService = remember { ChessApiService.create() }
+                    val socketService = remember { SocketService.getInstance() }
+                    val nearbyManager = remember { NearbyConnectionsManager(this@MainActivity) }
                     var screen by remember { mutableStateOf<Screen>(Screen.Menu) }
+                    val activity = this@MainActivity
+                    val requiredNearbyPermissions = remember { buildNearbyPermissions() }
+                    var nearbyPermissionsGranted by remember {
+                        mutableStateOf(hasAllPermissions(activity, requiredNearbyPermissions))
+                    }
+                    val permissionLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.RequestMultiplePermissions()
+                    ) { result ->
+                        val allGranted = requiredNearbyPermissions.all { permission ->
+                            result[permission] == true ||
+                                ContextCompat.checkSelfPermission(activity, permission) == PackageManager.PERMISSION_GRANTED
+                        }
+                        nearbyPermissionsGranted = allGranted
+                        if (allGranted) {
+                            screen = Screen.NearbyModeSelection
+                        } else {
+                            Toast.makeText(
+                                activity,
+                                "Nearby permissions are required to create or join offline games.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+
+                    LaunchedEffect(screen) {
+                        if (screen == Screen.Menu) {
+                            nearbyPermissionsGranted = hasAllPermissions(activity, requiredNearbyPermissions)
+                        }
+                    }
+                    
+                    // Cleanup nearby manager when activity is destroyed
+                    DisposableEffect(nearbyManager) {
+                        onDispose {
+                            nearbyManager.cleanup()
+                        }
+                    }
                     var modalState by remember { mutableStateOf<ModalState>(ModalState.None) }
                     var currentRoomCode by remember { mutableStateOf<String?>(null) }
+                    var currentTimeControl by remember { mutableStateOf<TimeControl?>(null) }
+                    var pendingAiConfig by remember { mutableStateOf<AiGameConfig?>(null) }
+
+                    LaunchedEffect(pendingAiConfig) {
+                        val config = pendingAiConfig ?: return@LaunchedEffect
+                        try {
+                            modalState = ModalState.AiSetup(isProcessing = true)
+
+                            if (!socketService.isConnected()) {
+                                socketService.connect()
+                            }
+
+                            val connected = withTimeoutOrNull(5_000) {
+                                while (!socketService.isConnected()) {
+                                    delay(100)
+                                }
+                                true
+                            }
+
+                            if (connected != true) {
+                                throw IllegalStateException("Unable to connect to chess server")
+                            }
+
+                            val response = apiService.createRoom()
+                            if (!response.isSuccessful) {
+                                throw IllegalStateException("Failed to create room (${response.code()})")
+                            }
+                            val roomCode = response.body()?.code ?: throw IllegalStateException("Server returned empty room code")
+                            currentRoomCode = roomCode
+
+                            val joinAck = CompletableDeferred<Unit>()
+                            socketService.setOnRoomJoinedCallback { code, _ ->
+                                if (code.equals(roomCode, ignoreCase = true) && !joinAck.isCompleted) {
+                                    joinAck.complete(Unit)
+                                }
+                            }
+
+                            val uid = "ai_${System.currentTimeMillis()}"
+                            socketService.joinRoom(roomCode, uid)
+
+                            withTimeout(5_000) {
+                                joinAck.await()
+                            }
+
+                            socketService.setOnRoomJoinedCallback(null)
+
+                            modalState = ModalState.None
+                            pendingAiConfig = null
+                            screen = Screen.Game(
+                                playerColor = config.color,
+                                isOnlineMode = true,
+                                roomCode = roomCode,
+                                isAiMode = true,
+                                aiLevel = config.level,
+                                aiThinkTimeMs = config.thinkTimeMs,
+                                timeControl = currentTimeControl
+                            )
+                        } catch (e: Exception) {
+                            socketService.setOnRoomJoinedCallback(null)
+                            pendingAiConfig = null
+                            modalState = ModalState.AiSetup(
+                                isProcessing = false,
+                                errorMessage = e.message ?: "Unable to start AI game"
+                            )
+                        }
+                    }
 
                     AnimatedContent(
                         targetState = screen,
                         modifier = Modifier.fillMaxSize(),
                         transitionSpec = {
                             val animationDuration = 400
-                            val slideDirection = when (targetState) {
-                                Screen.Menu -> -1 // Slide in from left when going back to menu
-                                is Screen.Game, Screen.Watch -> 1 // Slide in from right when going forward
+                            fun screenOrder(screen: Screen): Int = when (screen) {
+                                Screen.Menu -> 0
+                                Screen.NearbyModeSelection -> 1
+                                Screen.NearbyCreateGame, Screen.NearbyJoinGame -> 2
+                                Screen.Watch -> 2
+                                is Screen.Game -> 3
                             }
+
+                            val initialOrder = screenOrder(initialState)
+                            val targetOrder = screenOrder(targetState)
+                            val slideDirection = if (targetOrder >= initialOrder) 1 else -1
                             
                             slideInHorizontally(
                                 initialOffsetX = { fullWidth -> slideDirection * fullWidth },
@@ -72,7 +253,15 @@ class MainActivity : ComponentActivity() {
                             Screen.Menu -> MenuScreen(
                                 onGetStarted = { screen = Screen.Game() }, // Offline mode
                                 onWatchGame = { screen = Screen.Watch },
-                                onPlayOnline = { modalState = ModalState.OnlinePlay }
+                                onPlayOnline = { modalState = ModalState.OnlinePlay },
+                                onPlayVsAi = { modalState = ModalState.AiSetup() },
+                                onPlayNearby = {
+                                    if (nearbyPermissionsGranted || requiredNearbyPermissions.isEmpty()) {
+                                        screen = Screen.NearbyModeSelection
+                                    } else {
+                                        permissionLauncher.launch(requiredNearbyPermissions)
+                                    }
+                                }
                             )
                             is Screen.Game -> ChessBoardBitboard(
                                 initial = initialBitboards(),
@@ -80,10 +269,43 @@ class MainActivity : ComponentActivity() {
                                 playerColor = currentScreen.playerColor,
                                 isOnlineMode = currentScreen.isOnlineMode,
                                 roomCode = currentScreen.roomCode,
+                                isAiMode = currentScreen.isAiMode,
+                                aiLevel = currentScreen.aiLevel,
+                                aiThinkTimeMs = currentScreen.aiThinkTimeMs,
+                                isNearbyMode = currentScreen.isNearbyMode,
+                                nearbyManager = if (currentScreen.isNearbyMode) nearbyManager else null,
+                                timeControl = currentScreen.timeControl,
                                 modifier = Modifier.fillMaxSize()
                             )
                             Screen.Watch -> WatchGameScreen(
                                 onBack = { screen = Screen.Menu }
+                            )
+                            Screen.NearbyModeSelection -> NearbyModeSelectionScreen(
+                                onBack = { screen = Screen.Menu },
+                                onCreateGame = { screen = Screen.NearbyCreateGame },
+                                onJoinGame = { screen = Screen.NearbyJoinGame }
+                            )
+                            Screen.NearbyCreateGame -> NearbyCreateGameScreen(
+                                nearbyManager = nearbyManager,
+                                onBack = { screen = Screen.NearbyModeSelection },
+                                onGameStart = { timeControl ->
+                                    screen = Screen.Game(
+                                        playerColor = Side.WHITE,
+                                        isNearbyMode = true,
+                                        timeControl = timeControl
+                                    )
+                                }
+                            )
+                            Screen.NearbyJoinGame -> NearbyJoinGameScreen(
+                                nearbyManager = nearbyManager,
+                                onBack = { screen = Screen.NearbyModeSelection },
+                                onGameStart = { timeControl ->
+                                    screen = Screen.Game(
+                                        playerColor = Side.BLACK,
+                                        isNearbyMode = true,
+                                        timeControl = timeControl
+                                    )
+                                }
                             )
                         }
                     }
@@ -94,8 +316,9 @@ class MainActivity : ComponentActivity() {
                             onDismiss = { modalState = ModalState.None },
                             onCreateRoom = { modalState = ModalState.ColorSelection },
                             onJoinRoom = { modalState = ModalState.JoinRoom },
-                            onRoomCreated = { roomCode -> 
+                            onRoomCreated = { roomCode, timeControl -> 
                                 currentRoomCode = roomCode
+                                currentTimeControl = timeControl
                             }
                         )
                         ModalState.ColorSelection -> ColorSelectionModal(
@@ -117,7 +340,12 @@ class MainActivity : ComponentActivity() {
                                     modalState = ModalState.None
                                     // Start online game with selected color
                                     val playerSide = if (selectedColor == "white") Side.WHITE else Side.BLACK
-                                    screen = Screen.Game(playerColor = playerSide, isOnlineMode = true, roomCode = currentModalState.roomCode)
+                                    screen = Screen.Game(
+                                        playerColor = playerSide,
+                                        isOnlineMode = true,
+                                        roomCode = currentModalState.roomCode,
+                                        timeControl = currentTimeControl
+                                    )
                                 }
                             )
                         }
@@ -128,9 +356,33 @@ class MainActivity : ComponentActivity() {
                                 currentRoomCode = roomCode
                                 modalState = ModalState.None
                                 // Assume joining player gets the opposite color (black by default for now)
-                                screen = Screen.Game(playerColor = Side.BLACK, isOnlineMode = true, roomCode = roomCode)
+                                screen = Screen.Game(
+                                    playerColor = Side.BLACK,
+                                    isOnlineMode = true,
+                                    roomCode = roomCode,
+                                    timeControl = currentTimeControl
+                                )
                             }
                         )
+                        is ModalState.AiSetup -> {
+                            val state = modalState as ModalState.AiSetup
+                            AiPlayModal(
+                                isProcessing = state.isProcessing,
+                                errorMessage = state.errorMessage,
+                                onDismiss = { if (!state.isProcessing) modalState = ModalState.None },
+                                onStartGame = { selectedSide, aiLevel, thinkTimeMs, timeControl ->
+                                    if (!state.isProcessing) {
+                                        modalState = ModalState.AiSetup(isProcessing = true)
+                                        currentTimeControl = timeControl
+                                        pendingAiConfig = AiGameConfig(
+                                            color = selectedSide,
+                                            level = aiLevel,
+                                            thinkTimeMs = thinkTimeMs
+                                        )
+                                    }
+                                }
+                            )
+                        }
                         ModalState.None -> {}
                     }
                 }

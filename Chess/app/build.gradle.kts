@@ -48,9 +48,12 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.ui.geometry)
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-gif:2.7.0")
+    // Google Play services Nearby (Connections API)
+    implementation("com.google.android.gms:play-services-nearby:19.1.0")
     
     // HTTP client for API calls
     implementation("com.squareup.retrofit2:retrofit:3.0.0")
@@ -59,6 +62,7 @@ dependencies {
     
     // Socket.IO client
     implementation("io.socket:socket.io-client:2.1.0")
+    implementation(libs.androidx.foundation)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

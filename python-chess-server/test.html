@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Test Socket.IO - Play vs Stockfish</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 16px;
+      }
+      fieldset {
+        border: 1px solid #888;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+      }
+      label {
+        display: block;
+        margin: 6px 0 2px;
+        font-weight: 600;
+      }
+      input,
+      button,
+      textarea {
+        font: inherit;
+        padding: 6px;
+        border-radius: 6px;
+        border: 1px solid #888;
+      }
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      textarea {
+        width: 100%;
+        height: 200px;
+        box-sizing: border-box;
+        font-family: monospace;
+      }
+      .btns {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+      .hint {
+        font-size: 12px;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Test Socket.IO — Play vs Stockfish</h1>
+
+    <fieldset>
+      <legend>Kết nối</legend>
+      <label>Server URL</label>
+      <input id="serverUrl" type="text" value="http://localhost:4001" />
+
+      <div class="row">
+        <div>
+          <label>Room code</label>
+          <input id="roomCode" type="text" placeholder="ABCDEF" />
+        </div>
+        <div>
+          <label>UID</label>
+          <input id="uid" type="text" value="player1" />
+        </div>
+      </div>
+
+      <div class="btns">
+        <button id="btnConnect">Connect</button>
+        <button id="btnCreate">Create Room</button>
+        <button id="btnJoin" disabled>Join Room</button>
+        <button id="btnDisconnect" disabled>Disconnect</button>
+      </div>
+
+      <div id="status" class="hint">Chưa kết nối.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Gửi nước đi vs AI</legend>
+      <label>Algebraic move (vd: <code>e2e4</code>, <code>g7g8q</code>)</label>
+      <input id="algMove" type="text" placeholder="e2e4 hoặc g7g8q" />
+
+      <label>Hoặc move index JSON (vd: {"from":12,"to":28})</label>
+      <input id="idxMove" type="text" placeholder='{"from":12,"to":28}' />
+
+      <div class="row">
+        <div>
+          <label>AI Level (0..20)</label>
+          <input id="level" type="number" value="16" min="0" max="20" />
+        </div>
+        <div>
+          <label>Think Time (ms)</label>
+          <input id="think" type="number" value="300" min="50" />
+        </div>
+      </div>
+
+      <div class="btns">
+        <button id="btnSend">Send Move vs AI</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Logs</legend>
+      <textarea id="log" readonly></textarea>
+      <div class="btns"><button id="btnClear">Clear log</button></div>
+    </fieldset>
+
+    <script>
+      (function () {
+        let socket = null;
+        const $ = (id) => document.getElementById(id);
+        const logEl = $("log");
+
+        function log(msg) {
+          logEl.value += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+        function setStatus(msg) {
+          $("status").textContent = msg;
+        }
+
+        $("btnConnect").onclick = () => {
+          const url = $("serverUrl").value.trim();
+          socket = io(url, { transports: ["websocket"] });
+
+          socket.on("connect", () => {
+            setStatus("Connected");
+            $("btnJoin").disabled = false;
+            $("btnDisconnect").disabled = false;
+            log("Connected");
+          });
+          socket.on("disconnect", () => {
+            setStatus("Disconnected");
+            $("btnJoin").disabled = true;
+            $("btnDisconnect").disabled = true;
+            log("Disconnected");
+          });
+          socket.on("room_joined", (p) =>
+            log("room_joined: " + JSON.stringify(p))
+          );
+          socket.on("room_state", (p) =>
+            log("room_state: " + JSON.stringify(p))
+          );
+          socket.on("ai_move", (p) => log("ai_move: " + JSON.stringify(p)));
+          socket.on("error_msg", (e) => log("error_msg: " + JSON.stringify(e)));
+        };
+
+        $("btnDisconnect").onclick = () => socket && socket.disconnect();
+
+        $("btnCreate").onclick = async () => {
+          const url = $("serverUrl").value.trim();
+          try {
+            const res = await fetch(url + "/room", { method: "POST" });
+            const data = await res.json();
+            $("roomCode").value = data.code;
+            log("Created room: " + data.code);
+          } catch (err) {
+            log("Create room failed: " + err);
+          }
+        };
+
+        $("btnJoin").onclick = () => {
+          const code = $("roomCode").value.trim();
+          const uid = $("uid").value.trim();
+          socket.emit("join_room", { code, uid });
+          log("join_room -> code=" + code + ", uid=" + uid);
+        };
+
+        $("btnSend").onclick = () => {
+          const code = $("roomCode").value.trim();
+          const alg = $("algMove").value.trim();
+          const idx = $("idxMove").value.trim();
+          let move = null;
+
+          // parse algebraic 4-5 chars: e2e4, g7g8q
+          if (alg) {
+            const m = alg.match(/^([a-h][1-8])([a-h][1-8])([qrbnQRBN])?$/);
+            if (m) {
+              const sqToIdx = (s) =>
+                (parseInt(s[1]) - 1) * 8 + (s[0].charCodeAt(0) - 97);
+              move = { from: sqToIdx(m[1]), to: sqToIdx(m[2]) };
+              if (m[3]) move.promo = m[3].toUpperCase();
+            }
+          } else if (idx) {
+            try {
+              move = JSON.parse(idx);
+            } catch {}
+          }
+          if (!move) return alert("Nước đi không hợp lệ");
+
+          socket.emit("move_vs_ai", {
+            code,
+            move,
+            level: +$("level").value,
+            thinkTimeMs: +$("think").value,
+          });
+          log("move_vs_ai -> " + JSON.stringify({ code, move }));
+        };
+
+        $("btnClear").onclick = () => (logEl.value = "");
+      })();
+    </script>
+  </body>
+</html>

@@ -16,17 +16,13 @@ interface ChessApiService {
     suspend fun createRoom(): Response<CreateRoomResponse>
     
     companion object {
-        private const val BASE_URL = "http://10.0.2.2:4000/" // Android emulator localhost
-        
         fun create(): ChessApiService {
             val loggingInterceptor = HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BODY
             }
-            
             val client = OkHttpClient.Builder()
                 .addInterceptor(loggingInterceptor)
                 .build()
-            
             return Retrofit.Builder()
                 .baseUrl(BASE_URL)
                 .client(client)

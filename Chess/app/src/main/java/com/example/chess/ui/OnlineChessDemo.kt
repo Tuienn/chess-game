@@ -30,7 +30,8 @@ fun OnlineChessDemo(
     var currentRoomCode by remember { mutableStateOf<String?>(null) }
     var playerColor by remember { mutableStateOf<Side?>(null) }
     var gameStarted by remember { mutableStateOf(false) }
-    
+    var selectedTimeControl by remember { mutableStateOf<TimeControl?>(null) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -84,10 +85,12 @@ fun OnlineChessDemo(
                         gameStarted = false
                         currentRoomCode = null
                         playerColor = null
+                        selectedTimeControl = null
                     },
                     playerColor = playerColor,
                     isOnlineMode = true,
-                    roomCode = roomCode
+                    roomCode = roomCode,
+                    timeControl = selectedTimeControl
                 )
             }
         }
@@ -105,9 +108,10 @@ fun OnlineChessDemo(
                 showOnlineModal = false
                 showJoinRoomModal = true
             },
-            onRoomCreated = { roomCode ->
-                Log.d("OnlineDemo", "Room created callback: roomCode=$roomCode")
+            onRoomCreated = { roomCode, timeControl ->
+                Log.d("OnlineDemo", "Room created callback: roomCode=$roomCode, timeControl=$timeControl")
                 createdRoomCode = roomCode
+                selectedTimeControl = timeControl
             }
         )
     }

@@ -25,6 +25,8 @@ fun MenuScreen(
     onGetStarted: () -> Unit,
     onWatchGame: () -> Unit,
     onPlayOnline: () -> Unit,
+    onPlayVsAi: () -> Unit,
+    onPlayNearby: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -41,8 +43,7 @@ fun MenuScreen(
 
         ) {
             Column(
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.padding(top = 100.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
                     text = "115,512 Playing Now",
@@ -103,6 +104,25 @@ fun MenuScreen(
                 }
 
                 Button(
+                    onClick = onPlayVsAi,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF9B59B6),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text(
+                        text = "Play vs AI",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Button(
                     onClick = onPlayOnline,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -114,6 +134,25 @@ fun MenuScreen(
                 ) {
                     Text(
                         text = "Play online",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Button(
+                    onClick = onPlayNearby,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFE67E22),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text(
+                        text = "Play offline (Nearby)",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
