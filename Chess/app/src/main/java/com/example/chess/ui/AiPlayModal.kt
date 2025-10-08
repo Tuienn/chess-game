@@ -3,34 +3,12 @@ package com.example.chess.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +22,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.chess.R
 import com.example.chess.model.Side
+import com.example.chess.model.TimeControl
+import androidx.compose.runtime.saveable.rememberSaveable
 
 data class AiDifficultyRange(
     val minLevel: Int = 0,
@@ -57,7 +37,7 @@ data class AiDifficultyRange(
 @Composable
 fun AiPlayModal(
     onDismiss: () -> Unit,
-    onStartGame: (Side, Int, Int) -> Unit,
+    onStartGame: (Side, Int, Int, TimeControl) -> Unit,
     isProcessing: Boolean,
     errorMessage: String?,
     modifier: Modifier = Modifier,
@@ -66,6 +46,7 @@ fun AiPlayModal(
     var selectedSide by rememberSaveable { mutableStateOf(Side.WHITE) }
     var level by rememberSaveable { mutableStateOf(difficultyRange.defaultLevel.toFloat()) }
     var thinkTime by rememberSaveable { mutableStateOf(difficultyRange.defaultThinkTimeMs.toFloat()) }
+    var selectedTimeControl by remember { mutableStateOf(TimeControl.FIVE_MINUTES) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -77,18 +58,22 @@ fun AiPlayModal(
         Card(
             modifier = modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(12.dp),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 HeaderSection(onDismiss = onDismiss, isProcessing = isProcessing)
                 ColorSelectionSection(
                     selectedSide = selectedSide,
                     onSelectSide = { if (!isProcessing) selectedSide = it }
+                )
+                TimeControlSection(
+                    selectedTimeControl = selectedTimeControl,
+                    onTimeControlSelected = { if (!isProcessing) selectedTimeControl = it }
                 )
                 DifficultySection(
                     level = level,
@@ -110,13 +95,13 @@ fun AiPlayModal(
                 Button(
                     onClick = {
                         if (!isProcessing) {
-                            onStartGame(selectedSide, level.toInt(), thinkTime.toInt())
+                            onStartGame(selectedSide, level.toInt(), thinkTime.toInt(), selectedTimeControl)
                         }
                     },
                     enabled = !isProcessing,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp),
+                        .height(52.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFF2ECC71),
                         contentColor = Color.Black
@@ -124,20 +109,78 @@ fun AiPlayModal(
                 ) {
                     if (isProcessing) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(18.dp),
                             color = Color.Black,
                             strokeWidth = 2.dp
                         )
                     } else {
                         Text(
                             text = "Start game",
-                            fontSize = 18.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TimeControlSection(
+    selectedTimeControl: TimeControl,
+    onTimeControlSelected: (TimeControl) -> Unit
+) {
+    Text(
+        text = "Time Control",
+        fontSize = 15.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = Color.White
+    )
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        AiTimeControlChip("1m", TimeControl.ONE_MINUTE, selectedTimeControl, onTimeControlSelected)
+        AiTimeControlChip("3m", TimeControl.THREE_MINUTES, selectedTimeControl, onTimeControlSelected)
+        AiTimeControlChip("5m", TimeControl.FIVE_MINUTES, selectedTimeControl, onTimeControlSelected)
+    }
+
+    Spacer(modifier = Modifier.height(4.dp))
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        AiTimeControlChip("10m", TimeControl.TEN_MINUTES, selectedTimeControl, onTimeControlSelected)
+        AiTimeControlChip("30m", TimeControl.THIRTY_MINUTES, selectedTimeControl, onTimeControlSelected)
+        AiTimeControlChip("∞", TimeControl.NO_LIMIT, selectedTimeControl, onTimeControlSelected)
+    }
+}
+
+@Composable
+private fun RowScope.AiTimeControlChip(
+    label: String,
+    timeControl: TimeControl,
+    selected: TimeControl,
+    onSelect: (TimeControl) -> Unit
+) {
+    Button(
+        onClick = { onSelect(timeControl) },
+        modifier = Modifier
+            .weight(1f)
+            .height(38.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected == timeControl) Color(0xFF9B59B6) else Color(0xFF2A2A2A),
+            contentColor = Color.White
+        )
+    ) {
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = if (selected == timeControl) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }
 
@@ -151,13 +194,13 @@ private fun HeaderSection(onDismiss: () -> Unit, isProcessing: Boolean) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "Play vs AI",
-                fontSize = 24.sp,
+                fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
             Text(
                 text = "Pick your side and tune Stockfish",
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 color = Color.White.copy(alpha = 0.7f)
             )
         }
@@ -181,14 +224,14 @@ private fun ColorSelectionSection(
 ) {
     Text(
         text = "Choose your pieces",
-        fontSize = 16.sp,
+        fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold,
         color = Color.White
     )
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         AiColorOption(
             label = "White",
@@ -219,7 +262,7 @@ private fun DifficultySection(
 ) {
     Text(
         text = "AI level",
-        fontSize = 16.sp,
+        fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold,
         color = Color.White
     )
@@ -239,15 +282,15 @@ private fun DifficultySection(
 
     Text(
         text = "Skill ${level.toInt()} (0 easiest — ${difficultyRange.maxLevel} hardest)",
-        fontSize = 14.sp,
+        fontSize = 13.sp,
         color = Color.White.copy(alpha = 0.8f)
     )
 
-    Spacer(modifier = Modifier.height(8.dp))
+    Spacer(modifier = Modifier.height(4.dp))
 
     Text(
         text = "Thinking time",
-        fontSize = 16.sp,
+        fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold,
         color = Color.White
     )
@@ -267,7 +310,7 @@ private fun DifficultySection(
 
     Text(
         text = "${thinkTime.toInt()} ms per move",
-        fontSize = 14.sp,
+        fontSize = 13.sp,
         color = Color.White.copy(alpha = 0.8f)
     )
 }
@@ -286,7 +329,7 @@ private fun RowScope.AiColorOption(
     Card(
         modifier = Modifier
             .weight(1f)
-            .height(140.dp)
+            .height(120.dp)
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = backgroundColor)
@@ -294,15 +337,15 @@ private fun RowScope.AiColorOption(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(12.dp)
                 .border(2.dp, borderColor, RoundedCornerShape(12.dp)),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(50.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(Color.White.copy(alpha = 0.1f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -310,18 +353,18 @@ private fun RowScope.AiColorOption(
                     painter = painterResource(iconRes),
                     contentDescription = label,
                     tint = Color.Unspecified,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(36.dp)
                 )
             }
             Text(
                 text = label,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
             Text(
                 text = description,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 color = Color.White.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center
             )

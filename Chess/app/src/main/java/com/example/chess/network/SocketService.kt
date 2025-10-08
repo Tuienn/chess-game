@@ -28,6 +28,7 @@ class SocketService {
     private var onOpponentJoinedCallback: (() -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
     private var onAiMoveCallback: ((AiMoveResult) -> Unit)? = null
+    private var onTimerUpdateCallback: ((Long?, Long?) -> Unit)? = null // (whiteTimeMs, blackTimeMs)
     
     companion object {
         private const val TAG = "SocketService"
@@ -167,6 +168,10 @@ class SocketService {
         onAiMoveCallback = callback
     }
     
+    fun setOnTimerUpdateCallback(callback: ((Long?, Long?) -> Unit)?) {
+        onTimerUpdateCallback = callback
+    }
+    
     // Private event handlers
     private fun handleRoomState(data: JSONObject) {
         try {
@@ -189,6 +194,18 @@ class SocketService {
                     "isCastle=${move.isCastle}, isEnPassant=${move.isEnPassant}, isDoublePawnPush=${move.isDoublePawnPush}"
             )
             onMoveReceivedCallback?.invoke(move)
+            
+            // Handle timer update if present
+            if (data.has("whiteTimeMs") || data.has("blackTimeMs")) {
+                val whiteTimeMs = if (data.has("whiteTimeMs") && !data.isNull("whiteTimeMs")) {
+                    data.getLong("whiteTimeMs")
+                } else null
+                val blackTimeMs = if (data.has("blackTimeMs") && !data.isNull("blackTimeMs")) {
+                    data.getLong("blackTimeMs")
+                } else null
+                onTimerUpdateCallback?.invoke(whiteTimeMs, blackTimeMs)
+                Log.d(TAG, "Timer update: white=$whiteTimeMs, black=$blackTimeMs")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing move", e)
         }

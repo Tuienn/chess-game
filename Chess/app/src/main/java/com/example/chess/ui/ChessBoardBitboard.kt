@@ -59,7 +59,8 @@ fun ChessBoardBitboard(
     aiLevel: Int = 10,
     aiThinkTimeMs: Int = 500,
     isNearbyMode: Boolean = false,
-    nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null
+    nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null,
+    timeControl: TimeControl? = null
 ) {
     var gameState by remember {
         mutableStateOf(GameState(boards = initial, sideToMove = Side.WHITE))
@@ -75,7 +76,8 @@ fun ChessBoardBitboard(
         aiLevel = aiLevel,
         aiThinkTimeMs = aiThinkTimeMs,
         isNearbyMode = isNearbyMode,
-        nearbyManager = nearbyManager
+        nearbyManager = nearbyManager,
+        timeControl = timeControl
     ) { gameState = it }
 }
 
@@ -95,7 +97,8 @@ fun ChessBoardBitboard(
     aiLevel: Int = 10,
     aiThinkTimeMs: Int = 500,
     isNearbyMode: Boolean = false,
-    nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null
+    nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null,
+    timeControl: TimeControl? = null
 ) {
     var gameState by remember { mutableStateOf(initialState) }
     ChessBoardBitboardImpl(
@@ -109,7 +112,8 @@ fun ChessBoardBitboard(
         aiLevel = aiLevel,
         aiThinkTimeMs = aiThinkTimeMs,
         isNearbyMode = isNearbyMode,
-        nearbyManager = nearbyManager
+        nearbyManager = nearbyManager,
+        timeControl = timeControl
     ) { gameState = it }
 }
 
@@ -130,6 +134,7 @@ private fun ChessBoardBitboardImpl(
     aiThinkTimeMs: Int = 500,
     isNearbyMode: Boolean = false,
     nearbyManager: com.example.chess.nearby.NearbyConnectionsManager? = null,
+    timeControl: TimeControl? = null,
     onGameStateChange: (GameState) -> Unit
 ) {
     val context = LocalContext.current
@@ -138,6 +143,20 @@ private fun ChessBoardBitboardImpl(
     var availableMoves by remember { mutableStateOf<List<Move>>(emptyList()) }
     val latestGameState = rememberUpdatedState(gameState)
     val latestOnGameStateChange = rememberUpdatedState(onGameStateChange)
+    
+    // Timer state
+    val timerEnabled = timeControl?.enabled == true
+    var playerTimers by remember(timeControl) {
+        mutableStateOf(
+            if (timerEnabled && timeControl != null) {
+                PlayerTimers(
+                    whiteRemainingMs = timeControl.totalTimeMs,
+                    blackRemainingMs = timeControl.totalTimeMs
+                )
+            } else null
+        )
+    }
+    var gameEndedOnTime by remember { mutableStateOf<Side?>(null) }
 
     // Socket service (online)
     val socketService = remember { if (isOnlineMode) SocketService.getInstance() else null }
@@ -190,6 +209,18 @@ private fun ChessBoardBitboardImpl(
                     latestOnGameStateChange.value(updatedState)
                 }
             }
+            
+            // Timer sync callback
+            socketService.setOnTimerUpdateCallback { whiteMs, blackMs ->
+                if (timerEnabled && whiteMs != null && blackMs != null) {
+                    playerTimers = PlayerTimers(
+                        whiteRemainingMs = whiteMs,
+                        blackRemainingMs = blackMs,
+                        lastUpdateTimestamp = System.currentTimeMillis()
+                    )
+                    Log.d("ChessBoard", "Timer synced: white=$whiteMs, black=$blackMs")
+                }
+            }
         }
     }
     DisposableEffect(socketService, isOnlineMode) {
@@ -197,6 +228,7 @@ private fun ChessBoardBitboardImpl(
             if (isOnlineMode && socketService != null) {
                 socketService.setOnMoveReceivedCallback(null)
                 socketService.setOnAiMoveCallback(null)
+                socketService.setOnTimerUpdateCallback(null)
             }
         }
     }
@@ -223,6 +255,17 @@ private fun ChessBoardBitboardImpl(
                     NotificationHelper.showConnectionLost(context, message)
                 }
             }
+            
+            nearbyManager.setOnTimerUpdateCallback { whiteMs, blackMs ->
+                if (timerEnabled) {
+                    playerTimers = PlayerTimers(
+                        whiteRemainingMs = whiteMs,
+                        blackRemainingMs = blackMs,
+                        lastUpdateTimestamp = System.currentTimeMillis()
+                    )
+                    Log.d("ChessBoard", "P2P timer synced: white=$whiteMs, black=$blackMs")
+                }
+            }
         }
     }
     DisposableEffect(nearbyManager, isNearbyMode) {
@@ -230,6 +273,43 @@ private fun ChessBoardBitboardImpl(
             if (isNearbyMode && nearbyManager != null) {
                 nearbyManager.setOnMoveReceivedCallback(null)
                 nearbyManager.setOnConnectionStatusChangedCallback(null)
+                nearbyManager.setOnTimerUpdateCallback(null)
+            }
+        }
+    }
+
+    // Timer countdown
+    LaunchedEffect(timerEnabled, gameState.sideToMove, gameEndedOnTime) {
+        if (timerEnabled && playerTimers != null && gameEndedOnTime == null) {
+            val status = getGameStatus(gameState)
+            if (status != GameStatus.CHECKMATE && status != GameStatus.STALEMATE) {
+                while (playerTimers != null && gameEndedOnTime == null) {
+                    kotlinx.coroutines.delay(100) // Update every 100ms
+                    
+                    val currentTimers = playerTimers ?: break
+                    val currentTime = System.currentTimeMillis()
+                    val elapsed = currentTime - currentTimers.lastUpdateTimestamp
+
+                    playerTimers = if (gameState.sideToMove == Side.WHITE) {
+                        val newWhiteTime = (currentTimers.whiteRemainingMs - elapsed).coerceAtLeast(0)
+                        if (newWhiteTime <= 0 && gameEndedOnTime == null) {
+                            gameEndedOnTime = Side.BLACK // Black wins
+                        }
+                        currentTimers.copy(
+                            whiteRemainingMs = newWhiteTime,
+                            lastUpdateTimestamp = currentTime
+                        )
+                    } else {
+                        val newBlackTime = (currentTimers.blackRemainingMs - elapsed).coerceAtLeast(0)
+                        if (newBlackTime <= 0 && gameEndedOnTime == null) {
+                            gameEndedOnTime = Side.WHITE // White wins
+                        }
+                        currentTimers.copy(
+                            blackRemainingMs = newBlackTime,
+                            lastUpdateTimestamp = currentTime
+                        )
+                    }
+                }
             }
         }
     }
@@ -321,6 +401,14 @@ private fun ChessBoardBitboardImpl(
                 if (isNearbyMode && nearbyManager != null) {
                     nearbyManager.sendMove(move)
                     Log.d("ChessBoard", "Sent P2P move: ${move.from} -> ${move.to}")
+                    
+                    // Send timer update after move
+                    playerTimers?.let { timers ->
+                        nearbyManager.sendTimerUpdate(
+                            timers.whiteRemainingMs,
+                            timers.blackRemainingMs
+                        )
+                    }
                 }
 
                 pendingMove = null
@@ -362,6 +450,14 @@ private fun ChessBoardBitboardImpl(
             if (isNearbyMode && nearbyManager != null) {
                 nearbyManager.sendMove(promotionMove)
                 Log.d("ChessBoard", "Sent P2P promotion move: ${promotionMove.from} -> ${promotionMove.to}, promo: ${promotionMove.promo}")
+                
+                // Send timer update after promotion
+                playerTimers?.let { timers ->
+                    nearbyManager.sendTimerUpdate(
+                        timers.whiteRemainingMs,
+                        timers.blackRemainingMs
+                    )
+                }
             }
 
             pendingPromotionMove = null
@@ -396,6 +492,19 @@ private fun ChessBoardBitboardImpl(
                 .padding(16.dp)
         ) {
             Spacer(modifier = Modifier.weight(1f))
+
+            // Opponent Timer (top)
+            if (timerEnabled && playerTimers != null) {
+                val timers = playerTimers!!
+                val opponentSide = if (playerColor == Side.WHITE) Side.BLACK else Side.WHITE
+                val opponentTime = if (opponentSide == Side.WHITE) timers.whiteRemainingMs else timers.blackRemainingMs
+                ChessTimerDisplay(
+                    timeRemainingMs = opponentTime,
+                    isActive = gameState.sideToMove == opponentSide,
+                    isPlayerTimer = false,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
 
             BoxWithConstraints(
                 modifier = Modifier
@@ -515,6 +624,18 @@ private fun ChessBoardBitboardImpl(
                 selected?.let { HighlightOrigin(index = it, square = sq, shouldRotateBoard = shouldRotateBoard) }
             }
 
+            // Player Timer (bottom)
+            if (timerEnabled && playerTimers != null) {
+                val timers = playerTimers!!
+                val playerTime = if (playerColor == Side.WHITE) timers.whiteRemainingMs else timers.blackRemainingMs
+                ChessTimerDisplay(
+                    timeRemainingMs = playerTime,
+                    isActive = gameState.sideToMove == playerColor,
+                    isPlayerTimer = true,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+
             Spacer(modifier = Modifier.weight(1f))
 
             // 7) Promotion Sheet
@@ -536,6 +657,7 @@ private fun ChessBoardBitboardImpl(
             // 8) Game End Dialog
             GameEndDialog(
                 gameState = gameState,
+                gameEndedOnTime = gameEndedOnTime,
                 onReturnToMenu = onBack
             )
         }
@@ -722,27 +844,36 @@ private fun AnimatedPiece(
 @Composable
 private fun GameEndDialog(
     gameState: GameState,
+    gameEndedOnTime: Side? = null,
     onReturnToMenu: () -> Unit
 ) {
     val status = getGameStatus(gameState)
 
-    if (status == GameStatus.CHECKMATE || status == GameStatus.STALEMATE) {
+    if (status == GameStatus.CHECKMATE || status == GameStatus.STALEMATE || gameEndedOnTime != null) {
         AlertDialog(
             onDismissRequest = { /* block outside dismiss */ },
             title = {
                 Text(
-                    text = if (status == GameStatus.CHECKMATE) "GAME OVER" else "DRAW",
+                    text = when {
+                        gameEndedOnTime != null -> "TIME'S UP!"
+                        status == GameStatus.CHECKMATE -> "GAME OVER"
+                        else -> "DRAW"
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp
                 )
             },
             text = {
-                val message = when (status) {
-                    GameStatus.CHECKMATE -> {
+                val message = when {
+                    gameEndedOnTime != null -> {
+                        val winner = if (gameEndedOnTime == Side.WHITE) "WHITE" else "BLACK"
+                        "$winner WINS ON TIME!"
+                    }
+                    status == GameStatus.CHECKMATE -> {
                         val winner = if (gameState.sideToMove == Side.WHITE) "BLACK" else "WHITE"
                         "$winner WINS!"
                     }
-                    GameStatus.STALEMATE -> "STALEMATE - DRAW"
+                    status == GameStatus.STALEMATE -> "STALEMATE - DRAW"
                     else -> ""
                 }
                 Text(

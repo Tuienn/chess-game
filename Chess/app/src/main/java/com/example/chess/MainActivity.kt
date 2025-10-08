@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.example.chess.model.initialBitboards
 import com.example.chess.model.Side
+import com.example.chess.model.TimeControl
 import com.example.chess.network.ChessApiService
 import com.example.chess.network.SocketService
 import com.example.chess.ui.AiPlayModal
@@ -79,7 +80,8 @@ sealed class Screen {
         val isAiMode: Boolean = false,
         val aiLevel: Int = DEFAULT_AI_LEVEL,
         val aiThinkTimeMs: Int = DEFAULT_AI_THINK_TIME_MS,
-        val isNearbyMode: Boolean = false
+        val isNearbyMode: Boolean = false,
+        val timeControl: TimeControl? = null
     ) : Screen()
     data object Watch : Screen()
     data object NearbyModeSelection : Screen()
@@ -153,6 +155,7 @@ class MainActivity : ComponentActivity() {
                     }
                     var modalState by remember { mutableStateOf<ModalState>(ModalState.None) }
                     var currentRoomCode by remember { mutableStateOf<String?>(null) }
+                    var currentTimeControl by remember { mutableStateOf<TimeControl?>(null) }
                     var pendingAiConfig by remember { mutableStateOf<AiGameConfig?>(null) }
 
                     LaunchedEffect(pendingAiConfig) {
@@ -206,7 +209,8 @@ class MainActivity : ComponentActivity() {
                                 roomCode = roomCode,
                                 isAiMode = true,
                                 aiLevel = config.level,
-                                aiThinkTimeMs = config.thinkTimeMs
+                                aiThinkTimeMs = config.thinkTimeMs,
+                                timeControl = currentTimeControl
                             )
                         } catch (e: Exception) {
                             socketService.setOnRoomJoinedCallback(null)
@@ -270,6 +274,7 @@ class MainActivity : ComponentActivity() {
                                 aiThinkTimeMs = currentScreen.aiThinkTimeMs,
                                 isNearbyMode = currentScreen.isNearbyMode,
                                 nearbyManager = if (currentScreen.isNearbyMode) nearbyManager else null,
+                                timeControl = currentScreen.timeControl,
                                 modifier = Modifier.fillMaxSize()
                             )
                             Screen.Watch -> WatchGameScreen(
@@ -283,20 +288,22 @@ class MainActivity : ComponentActivity() {
                             Screen.NearbyCreateGame -> NearbyCreateGameScreen(
                                 nearbyManager = nearbyManager,
                                 onBack = { screen = Screen.NearbyModeSelection },
-                                onGameStart = {
+                                onGameStart = { timeControl ->
                                     screen = Screen.Game(
                                         playerColor = Side.WHITE,
-                                        isNearbyMode = true
+                                        isNearbyMode = true,
+                                        timeControl = timeControl
                                     )
                                 }
                             )
                             Screen.NearbyJoinGame -> NearbyJoinGameScreen(
                                 nearbyManager = nearbyManager,
                                 onBack = { screen = Screen.NearbyModeSelection },
-                                onGameStart = {
+                                onGameStart = { timeControl ->
                                     screen = Screen.Game(
                                         playerColor = Side.BLACK,
-                                        isNearbyMode = true
+                                        isNearbyMode = true,
+                                        timeControl = timeControl
                                     )
                                 }
                             )
@@ -309,8 +316,9 @@ class MainActivity : ComponentActivity() {
                             onDismiss = { modalState = ModalState.None },
                             onCreateRoom = { modalState = ModalState.ColorSelection },
                             onJoinRoom = { modalState = ModalState.JoinRoom },
-                            onRoomCreated = { roomCode -> 
+                            onRoomCreated = { roomCode, timeControl -> 
                                 currentRoomCode = roomCode
+                                currentTimeControl = timeControl
                             }
                         )
                         ModalState.ColorSelection -> ColorSelectionModal(
@@ -332,7 +340,12 @@ class MainActivity : ComponentActivity() {
                                     modalState = ModalState.None
                                     // Start online game with selected color
                                     val playerSide = if (selectedColor == "white") Side.WHITE else Side.BLACK
-                                    screen = Screen.Game(playerColor = playerSide, isOnlineMode = true, roomCode = currentModalState.roomCode)
+                                    screen = Screen.Game(
+                                        playerColor = playerSide,
+                                        isOnlineMode = true,
+                                        roomCode = currentModalState.roomCode,
+                                        timeControl = currentTimeControl
+                                    )
                                 }
                             )
                         }
@@ -343,7 +356,12 @@ class MainActivity : ComponentActivity() {
                                 currentRoomCode = roomCode
                                 modalState = ModalState.None
                                 // Assume joining player gets the opposite color (black by default for now)
-                                screen = Screen.Game(playerColor = Side.BLACK, isOnlineMode = true, roomCode = roomCode)
+                                screen = Screen.Game(
+                                    playerColor = Side.BLACK,
+                                    isOnlineMode = true,
+                                    roomCode = roomCode,
+                                    timeControl = currentTimeControl
+                                )
                             }
                         )
                         is ModalState.AiSetup -> {
@@ -352,9 +370,10 @@ class MainActivity : ComponentActivity() {
                                 isProcessing = state.isProcessing,
                                 errorMessage = state.errorMessage,
                                 onDismiss = { if (!state.isProcessing) modalState = ModalState.None },
-                                onStartGame = { selectedSide, aiLevel, thinkTimeMs ->
+                                onStartGame = { selectedSide, aiLevel, thinkTimeMs, timeControl ->
                                     if (!state.isProcessing) {
                                         modalState = ModalState.AiSetup(isProcessing = true)
+                                        currentTimeControl = timeControl
                                         pendingAiConfig = AiGameConfig(
                                             color = selectedSide,
                                             level = aiLevel,

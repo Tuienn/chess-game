@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.chess.R
+import com.example.chess.model.TimeControl
 import com.example.chess.network.ChessApiService
 import com.example.chess.network.SocketService
 import kotlinx.coroutines.launch
@@ -35,13 +36,14 @@ fun OnlinePlayModal(
     onDismiss: () -> Unit,
     onCreateRoom: () -> Unit,
     onJoinRoom: () -> Unit,
-    onRoomCreated: (String) -> Unit = {}
+    onRoomCreated: (String, TimeControl) -> Unit = { _, _ -> }
 ) {
     val coroutineScope = rememberCoroutineScope()
     val apiService = remember { ChessApiService.create() }
     val socketService = remember { SocketService.getInstance() }
     var isCreatingRoom by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var selectedTimeControl by remember { mutableStateOf(TimeControl.FIVE_MINUTES) }
     
     // Connect socket when modal opens
     LaunchedEffect(Unit) {
@@ -94,6 +96,14 @@ fun OnlinePlayModal(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Time Selection
+                TimeSelectionSection(
+                    selectedTimeControl = selectedTimeControl,
+                    onTimeControlSelected = { selectedTimeControl = it }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Button(
                     onClick = {
                         isCreatingRoom = true
@@ -103,7 +113,7 @@ fun OnlinePlayModal(
                                 val response = apiService.createRoom()
                                 if (response.isSuccessful) {
                                     response.body()?.let { roomResponse ->
-                                        onRoomCreated(roomResponse.code)
+                                        onRoomCreated(roomResponse.code, selectedTimeControl)
                                         onCreateRoom()
                                     }
                                 } else {
@@ -664,4 +674,104 @@ private fun generateRoomCode(): String {
     return (1..6)
         .map { chars.random() }
         .joinToString("")
+}
+
+@Composable
+private fun TimeSelectionSection(
+    selectedTimeControl: TimeControl,
+    onTimeControlSelected: (TimeControl) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Time Control",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White
+        )
+        
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TimeControlButton(
+                label = "1m",
+                timeControl = TimeControl.ONE_MINUTE,
+                selected = selectedTimeControl == TimeControl.ONE_MINUTE,
+                onClick = { onTimeControlSelected(TimeControl.ONE_MINUTE) },
+                modifier = Modifier.weight(1f)
+            )
+            TimeControlButton(
+                label = "3m",
+                timeControl = TimeControl.THREE_MINUTES,
+                selected = selectedTimeControl == TimeControl.THREE_MINUTES,
+                onClick = { onTimeControlSelected(TimeControl.THREE_MINUTES) },
+                modifier = Modifier.weight(1f)
+            )
+            TimeControlButton(
+                label = "5m",
+                timeControl = TimeControl.FIVE_MINUTES,
+                selected = selectedTimeControl == TimeControl.FIVE_MINUTES,
+                onClick = { onTimeControlSelected(TimeControl.FIVE_MINUTES) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TimeControlButton(
+                label = "10m",
+                timeControl = TimeControl.TEN_MINUTES,
+                selected = selectedTimeControl == TimeControl.TEN_MINUTES,
+                onClick = { onTimeControlSelected(TimeControl.TEN_MINUTES) },
+                modifier = Modifier.weight(1f)
+            )
+            TimeControlButton(
+                label = "30m",
+                timeControl = TimeControl.THIRTY_MINUTES,
+                selected = selectedTimeControl == TimeControl.THIRTY_MINUTES,
+                onClick = { onTimeControlSelected(TimeControl.THIRTY_MINUTES) },
+                modifier = Modifier.weight(1f)
+            )
+            TimeControlButton(
+                label = "∞",
+                timeControl = TimeControl.NO_LIMIT,
+                selected = selectedTimeControl == TimeControl.NO_LIMIT,
+                onClick = { onTimeControlSelected(TimeControl.NO_LIMIT) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimeControlButton(
+    label: String,
+    timeControl: TimeControl,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(44.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) Color(0xFF3498DB) else Color(0xFF2A2A2A),
+            contentColor = Color.White
+        )
+    ) {
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+        )
+    }
 }

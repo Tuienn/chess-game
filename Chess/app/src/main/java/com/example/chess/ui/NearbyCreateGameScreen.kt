@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.chess.model.TimeControl
 import com.example.chess.nearby.NearbyConnectionsManager
 import com.example.chess.utils.NotificationHelper
 import com.example.chess.utils.P2PNotificationHandler
@@ -27,7 +28,7 @@ import com.example.chess.utils.P2PNotificationHandler
 fun NearbyCreateGameScreen(
     nearbyManager: NearbyConnectionsManager,
     onBack: () -> Unit,
-    onGameStart: () -> Unit,
+    onGameStart: (TimeControl) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -35,6 +36,7 @@ fun NearbyCreateGameScreen(
     
     var playerName by remember { mutableStateOf("Player 1") }
     var isAdvertising by remember { mutableStateOf(false) }
+    var selectedTimeControl by remember { mutableStateOf(TimeControl.FIVE_MINUTES) }
     
     // Start advertising when screen opens
     LaunchedEffect(Unit) {
@@ -53,7 +55,7 @@ fun NearbyCreateGameScreen(
             is NearbyConnectionsManager.ConnectionState.Connected -> {
                 NotificationHelper.showGameStarting(context)
                 kotlinx.coroutines.delay(1500) // Brief delay to show the message
-                onGameStart()
+                onGameStart(selectedTimeControl)
             }
             else -> {}
         }
@@ -251,7 +253,51 @@ fun NearbyCreateGameScreen(
                 }
             }
             
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Time Selection Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF1A1A1F)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Time Control",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        TimeControlChip("1m", TimeControl.ONE_MINUTE, selectedTimeControl) { selectedTimeControl = it }
+                        TimeControlChip("3m", TimeControl.THREE_MINUTES, selectedTimeControl) { selectedTimeControl = it }
+                        TimeControlChip("5m", TimeControl.FIVE_MINUTES, selectedTimeControl) { selectedTimeControl = it }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        TimeControlChip("10m", TimeControl.TEN_MINUTES, selectedTimeControl) { selectedTimeControl = it }
+                        TimeControlChip("30m", TimeControl.THIRTY_MINUTES, selectedTimeControl) { selectedTimeControl = it }
+                        TimeControlChip("∞", TimeControl.NO_LIMIT, selectedTimeControl) { selectedTimeControl = it }
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
             
             // Info Card
             Card(
@@ -283,5 +329,30 @@ fun NearbyCreateGameScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RowScope.TimeControlChip(
+    label: String,
+    timeControl: TimeControl,
+    selected: TimeControl,
+    onSelect: (TimeControl) -> Unit
+) {
+    Button(
+        onClick = { onSelect(timeControl) },
+        modifier = Modifier
+            .weight(1f)
+            .height(40.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected == timeControl) Color(0xFF2ECC71) else Color(0xFF2A2A2A),
+            contentColor = Color.White
+        )
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = if (selected == timeControl) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }

@@ -49,6 +49,10 @@ class RoomState(TypedDict):
     state: GameState
     sideToMove: Color
     lastActive: float  # milliseconds epoch
+    timeControlMs: Optional[int]  # Time control in milliseconds, None = no limit
+    whiteTimeMs: Optional[float]  # White's remaining time
+    blackTimeMs: Optional[float]  # Black's remaining time
+    turnStartTime: Optional[float]  # When current turn started (ms epoch)
 
 # ----------------------------
 # Server state (in-memory)
@@ -99,13 +103,17 @@ def gen_code() -> str:
 def initial_state() -> GameState:
     return {"lastMove": None, "boardFEN": "startpos"}
 
-def create_room(code: str) -> RoomState:
+def create_room(code: str, time_control_ms: Optional[int] = None) -> RoomState:
     room: RoomState = {
         "code": code,
         "players": [],
         "state": initial_state(),
         "sideToMove": "WHITE",
         "lastActive": now_ms(),
+        "timeControlMs": time_control_ms,
+        "whiteTimeMs": float(time_control_ms) if time_control_ms else None,
+        "blackTimeMs": float(time_control_ms) if time_control_ms else None,
+        "turnStartTime": None  # Will be set when game starts
     }
     boards[code] = chess.Board()
     return room
@@ -293,6 +301,11 @@ async def join_room(sid, payload):
             other = next((p for p in room["players"] if p["uid"] != uid), None)
             if other:
                 await sio.emit("opponent_joined", {}, to=other["socketId"])
+            
+            # Start timer when both players joined
+            if room["timeControlMs"] is not None:
+                room["turnStartTime"] = now_ms()
+                log.info(f"[TIMER] Game {code} started with time control {room['timeControlMs']}ms")
 
         # Đồng bộ state hiện tại
         board = boards.get(code)
@@ -339,6 +352,23 @@ async def move(sid, payload):
         if (player["color"] == "WHITE" and not is_whites_turn) or (player["color"] == "BLACK" and is_whites_turn):
             raise ValueError("Not your turn")
 
+        # Timer logic - check if time has expired
+        if room["timeControlMs"] is not None and room["turnStartTime"] is not None:
+            current_time = now_ms()
+            elapsed_ms = current_time - room["turnStartTime"]
+            
+            # Deduct time from active player
+            if is_whites_turn:
+                if room["whiteTimeMs"] is not None:
+                    room["whiteTimeMs"] = max(0, room["whiteTimeMs"] - elapsed_ms)
+                    if room["whiteTimeMs"] <= 0:
+                        raise ValueError("Time expired - Black wins!")
+            else:
+                if room["blackTimeMs"] is not None:
+                    room["blackTimeMs"] = max(0, room["blackTimeMs"] - elapsed_ms)
+                    if room["blackTimeMs"] <= 0:
+                        raise ValueError("Time expired - White wins!")
+
         # Áp dụng nước đi (hợp lệ)
         if "from" in mv and "from_" not in mv:
             mv["from_"] = mv["from"]
@@ -352,11 +382,17 @@ async def move(sid, payload):
         room["state"]["boardFEN"] = board.fen()
         room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
         room["lastActive"] = now_ms()
+        
+        # Update turn start time for timer
+        if room["timeControlMs"] is not None:
+            room["turnStartTime"] = now_ms()
 
         response = {
             "move": room["state"]["lastMove"],
             "sideToMove": room["sideToMove"],
             "state": room["state"],
+            "whiteTimeMs": room.get("whiteTimeMs"),
+            "blackTimeMs": room.get("blackTimeMs")
         }
         log.info(f"[PVP_GAME] Sending move_applied: {room['state']['lastMove']}")
         await sio.emit("move_applied", response, room=code)

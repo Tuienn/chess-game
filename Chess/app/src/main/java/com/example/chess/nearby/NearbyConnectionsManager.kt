@@ -42,6 +42,7 @@ class NearbyConnectionsManager(private val context: Context) {
     private var onMoveReceived: ((Move) -> Unit)? = null
     private var onGameStateReceived: ((GameState) -> Unit)? = null
     private var onConnectionStatusChanged: ((Boolean, String?) -> Unit)? = null
+    private var onTimerUpdate: ((Long, Long) -> Unit)? = null
     
     sealed class ConnectionState {
         object Disconnected : ConnectionState()
@@ -63,6 +64,7 @@ class NearbyConnectionsManager(private val context: Context) {
         data class GameSync(val gameState: GameState) : NearbyMessage()
         data class PlayerReady(val isReady: Boolean) : NearbyMessage()
         data class Disconnect(val reason: String) : NearbyMessage()
+        data class TimerUpdate(val whiteTimeMs: Long, val blackTimeMs: Long) : NearbyMessage()
     }
     
     // Connection lifecycle callbacks
@@ -282,6 +284,10 @@ class NearbyConnectionsManager(private val context: Context) {
                 Log.d("NearbyChess", "Received disconnect: ${message.reason}")
                 disconnect()
             }
+            is NearbyMessage.TimerUpdate -> {
+                Log.d("NearbyChess", "Received timer update: white=${message.whiteTimeMs}, black=${message.blackTimeMs}")
+                onTimerUpdate?.invoke(message.whiteTimeMs, message.blackTimeMs)
+            }
         }
     }
 
@@ -303,6 +309,11 @@ class NearbyConnectionsManager(private val context: Context) {
             is NearbyMessage.Disconnect -> {
                 json.addProperty("type", "Disconnect")
                 json.addProperty("reason", message.reason)
+            }
+            is NearbyMessage.TimerUpdate -> {
+                json.addProperty("type", "TimerUpdate")
+                json.addProperty("whiteTimeMs", message.whiteTimeMs)
+                json.addProperty("blackTimeMs", message.blackTimeMs)
             }
         }
         return gson.toJson(json)
@@ -333,6 +344,11 @@ class NearbyConnectionsManager(private val context: Context) {
                 "Disconnect" -> {
                     val reason = jsonObject.get("reason")?.asString ?: "Unknown"
                     NearbyMessage.Disconnect(reason)
+                }
+                "TimerUpdate" -> {
+                    val whiteTimeMs = jsonObject.get("whiteTimeMs")?.asLong ?: 0
+                    val blackTimeMs = jsonObject.get("blackTimeMs")?.asLong ?: 0
+                    NearbyMessage.TimerUpdate(whiteTimeMs, blackTimeMs)
                 }
                 else -> {
                     Log.e("NearbyChess", "Unknown message type: $type")
@@ -366,6 +382,23 @@ class NearbyConnectionsManager(private val context: Context) {
         onConnectionStatusChanged = callback
     }
     
+    /**
+     * Set callback for when timer update is received
+     */
+    fun setOnTimerUpdateCallback(callback: ((Long, Long) -> Unit)?) {
+        onTimerUpdate = callback
+    }
+    
+    /**
+     * Send timer update to opponent
+     */
+    fun sendTimerUpdate(whiteTimeMs: Long, blackTimeMs: Long) {
+        connectedEndpointId?.let { endpointId ->
+            val message = NearbyMessage.TimerUpdate(whiteTimeMs, blackTimeMs)
+            sendMessage(message, endpointId)
+        }
+    }
+
     /**
      * Stop advertising
      */
