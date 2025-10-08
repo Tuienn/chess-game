@@ -1,0 +1,81 @@
+# Giới thiệu dự án: Game Cờ Vua Real-time
+
+Đây là một dự án game cờ vua đa nền tảng, bao gồm một ứng dụng client trên Android và một server backend bằng Python. Trò chơi cho phép người dùng thi đấu cờ vua với nhau trong thời gian thực, chơi với máy (AI), hoặc chơi với bạn bè ở gần mà không cần kết nối Internet.
+
+## I. Công nghệ sử dụng
+
+Dự án được chia thành hai phần chính:
+
+### 1. Backend Server (`python-chess-server`)
+
+- **Ngôn ngữ:** Python
+- **Framework:** FastAPI để xây dựng các RESTful API (ví dụ: tạo phòng chơi).
+- **Giao tiếp Real-time:** Sử dụng `python-socketio` để xử lý các sự kiện trong game như tham gia phòng, di chuyển quân cờ, và cập nhật trạng thái ván đấu.
+- **Web Server:** Uvicorn, một ASGI server hiệu năng cao để chạy ứng dụng FastAPI.
+- **Logic Cờ vua:** Thư viện `python-chess` được dùng để quản lý bàn cờ, xác thực nước đi hợp lệ, và kiểm tra các điều kiện kết thúc game (chiếu hết, hết cờ,...).
+- **AI Engine:** Tích hợp với Stockfish, một trong những engine cờ vua mạnh nhất thế giới, để cung cấp chế độ chơi với máy. Độ khó của AI có thể được tùy chỉnh.
+- **Môi trường:** `python-dotenv` để quản lý các biến môi trường như đường dẫn đến Stockfish engine và port của server.
+
+### 2. Frontend - Ứng dụng Android (`Chess/`)
+
+- **Ngôn ngữ:** Kotlin, ngôn ngữ chính thức cho phát triển Android hiện đại.
+- **Giao diện người dùng (UI):** Jetpack Compose, một bộ công cụ UI khai báo giúp xây dựng giao diện một cách nhanh chóng và hiệu quả.
+- **Kiến trúc:** Dựa trên các thành phần của Android Jetpack, có thể bao gồm ViewModel, LiveData/Flow để quản lý trạng thái UI.
+- **Mạng (Networking):**
+    - **REST API:** Sử dụng một thư viện như Retrofit để giao tiếp với FastAPI server (ví dụ: gọi API để tạo phòng).
+    - **WebSockets:** Sử dụng thư viện Socket.IO client cho Java/Kotlin để kết nối với server và gửi/nhận các sự kiện game.
+- **Chơi Offline Local:** Tích hợp `Nearby Connections API` của Google để cho phép hai thiết bị ở gần nhau có thể tìm và kết nối trực tiếp để chơi cờ mà không cần kết nối Internet.
+- **Âm thanh:** Quản lý các hiệu ứng âm thanh trong game (di chuyển quân cờ, chiếu,...).
+
+## II. Chức năng chính của Game
+
+### 1. Chơi Online (Player vs. Player)
+- **Tạo phòng chơi:** Người chơi có thể tạo một phòng chơi mới và nhận một mã phòng (code) duy nhất.
+- **Tham gia phòng chơi:** Người chơi khác có thể sử dụng mã phòng để tham gia vào ván đấu.
+- **Đồng bộ thời gian thực:** Mọi nước đi đều được gửi lên server, xác thực và gửi lại cho cả hai người chơi để cập nhật bàn cờ ngay lập tức.
+- **Xử lý lượt đi:** Server kiểm soát lượt đi của mỗi bên (Trắng hoặc Đen) để đảm bảo người chơi không thể đi khi chưa đến lượt.
+- **Xử lý kết nối lại:** Nếu người chơi bị mất kết nối và kết nối lại, họ có thể tham gia lại vào ván đấu đang diễn ra.
+
+### 2. Chơi với Máy (Player vs. AI)
+- **Tích hợp Stockfish:** Người chơi có thể bắt đầu một ván đấu với AI do Stockfish điều khiển.
+- **Tùy chỉnh độ khó:** Có thể điều chỉnh "skill level" của AI để phù hợp với trình độ của người chơi.
+- **Phản hồi nhanh:** Server tính toán nước đi của AI và gửi lại cho client một cách nhanh chóng.
+
+### 3. Chơi Offline qua Nearby Connections
+- **Không cần Internet:** Chế độ này cho phép hai người chơi ở gần nhau (sử dụng kết nối Bluetooth) có thể thi đấu với nhau.
+- **Tự động tìm và kết nối:** Một người chơi tạo phòng, người còn lại có thể tìm và gửi yêu cầu tham gia.
+
+### 3. Chơi Offline
+- Tạo ván game offline trên 1 thiết bị duy nhất phục vụ cho 2 người chơi trên cùng 1 máy hoặc luyện tập
+
+### 4. Logic và Luật chơi
+- **Luật cờ vua đầy đủ:** Hỗ trợ tất cả các luật chơi cờ vua tiêu chuẩn.
+- **Các nước đi đặc biệt:** Xử lý chính xác các nước đi như Nhập thành (castling), Bắt tốt qua đường (en passant), và Phong cấp (promotion).
+- **Kiểm tra kết thúc ván đấu:** tự động phát hiện các trạng thái như Chiếu (check), Chiếu hết (checkmate), Hòa cờ (stalemate), và các luật hòa khác.
+- **Quản lý trạng thái:** Trạng thái bàn cờ được biểu diễn bằng chuỗi FEN (Forsyth–Edwards Notation), một định dạng chuẩn để mô tả một thế cờ.
+
+## III. Thuật toán Bitboard và Logic Cờ vua
+
+Một trong những điểm nhấn kỹ thuật của phần client (Android) là việc sử dụng **Bitboard** để biểu diễn và xử lý trạng thái bàn cờ.
+
+### 1. Bitboard là gì?
+- **Biểu diễn:** Thay vì dùng mảng 2D (8x8) truyền thống, Bitboard sử dụng một số nguyên không dấu 64-bit (`ULong` trong Kotlin) để đại diện cho toàn bộ bàn cờ. Mỗi bit trong số nguyên này tương ứng với một ô cờ (từ 0 đến 63). Nếu một bit được bật (giá trị là 1), nó biểu thị sự hiện diện của một quân cờ hoặc một thuộc tính nào đó tại ô cờ tương ứng.
+- **Cấu trúc:** Trong dự án này, chúng ta không dùng một, mà là một tập hợp các Bitboard. Cụ thể, có 12 Bitboard riêng biệt để lưu vị trí của từng loại quân cờ cho mỗi bên:
+    - `WK` (Vua Trắng), `WQ` (Hậu Trắng), `WR` (Xe Trắng),...
+    - `BK` (Vua Đen), `BQ` (Hậu Đen), `BR` (Xe Đen),...
+- **Tổng hợp:** Ngoài ra, có các Bitboard tổng hợp được tính toán nhanh chóng bằng các phép toán bitwise (OR), ví dụ:
+    - Bitboard cho tất cả quân Trắng.
+    - Bitboard cho tất cả quân Đen.
+    - Bitboard cho tất cả các quân cờ trên bàn.
+
+### 2. Ưu điểm của Bitboard
+- **Tốc độ:** Các phép toán logic trên bit (AND, OR, XOR, NOT, shift) cực kỳ nhanh trên CPU. Điều này cho phép việc tính toán nước đi, phát hiện va chạm, và kiểm tra các đòn tấn công được thực hiện với hiệu suất rất cao.
+- **Hiệu quả cho việc sinh nước đi:** Ví dụ, để tìm tất cả các nước đi của một quân Xe, ta có thể sử dụng các "bảng tra cứu" (lookup tables) và các phép toán bit để nhanh chóng xác định các ô nó có thể di chuyển đến trên hàng ngang và hàng dọc, chỉ dừng lại khi gặp một quân cờ khác.
+- **Tối ưu bộ nhớ:** Mặc dù sử dụng nhiều biến 64-bit, cách biểu diễn này vẫn rất gọn nhẹ và hiệu quả.
+
+### 3. Áp dụng trong Game
+- **`BitboardModel.kt`:** Định nghĩa cấu trúc dữ liệu `Bitboards` chứa 12 `ULong` cho các loại quân cờ.
+- **`MoveGen.kt` & `MoveEngine.kt`:** Chứa logic cốt lõi để sinh ra các nước đi hợp lệ (`generateMoves`) từ một vị trí quân cờ cho trước. Các hàm này sử dụng các phép toán bit để xác định các đường tấn công, các ô bị chặn, và các nước đi đặc biệt.
+- **`ChessBoardBitboard.kt`:** Composable giao diện người dùng nhận vào một đối tượng `Bitboards`, sau đó lặp qua các bit được bật để vẽ các quân cờ lên bàn cờ. Khi người dùng thực hiện một nước đi, một trạng thái `GameState` mới với `Bitboards` đã được cập nhật sẽ được tạo ra, kích hoạt việc vẽ lại giao diện.
+
+Việc sử dụng Bitboard là một kỹ thuật phổ biến trong các engine cờ vua chuyên nghiệp, giúp đạt được hiệu suất cần thiết cho việc phân tích và chơi cờ ở cấp độ cao.

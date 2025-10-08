@@ -113,7 +113,7 @@ def create_room(code: str) -> RoomState:
 PROMO_MAP = {"Q": chess.QUEEN, "R": chess.ROOK, "B": chess.BISHOP, "N": chess.KNIGHT}
 REV_PROMO_MAP = {v: k for k, v in PROMO_MAP.items()}
 
-def move_dict_from_chess_move(m: chess.Move, board: chess.Board) -> ChessMove:
+def move_dict_from_chess_move(m: chess.Move, board: chess.Board, board_before_move: chess.Board = None) -> ChessMove:
     md: ChessMove = {
         "from_": m.from_square,
         "to": m.to_square,
@@ -124,11 +124,26 @@ def move_dict_from_chess_move(m: chess.Move, board: chess.Board) -> ChessMove:
     }
     if m.promotion:
         md["promo"] = REV_PROMO_MAP.get(m.promotion)
-    # Heuristic castle detection: king moves two files
-    piece = board.piece_at(m.from_square)
+    
+    # Use board_before_move to check piece type if available
+    check_board = board_before_move if board_before_move else board
+    
+    # Castle detection: king moves two files
+    piece = check_board.piece_at(m.from_square)
     if piece and piece.piece_type == chess.KING:
         if abs(chess.square_file(m.from_square) - chess.square_file(m.to_square)) == 2:
             md["isCastle"] = True
+    
+    # En passant detection
+    if piece and piece.piece_type == chess.PAWN:
+        # Check if it's an en passant capture
+        if m.to_square == check_board.ep_square:
+            md["isEnPassant"] = True
+        # Check if it's a double pawn push
+        rank_diff = abs(chess.square_rank(m.from_square) - chess.square_rank(m.to_square))
+        if rank_diff == 2:
+            md["isDoublePawnPush"] = True
+    
     return md
 
 def apply_player_move_to_board(board: chess.Board, mv: dict) -> chess.Move:
@@ -327,10 +342,13 @@ async def move(sid, payload):
         # Áp dụng nước đi (hợp lệ)
         if "from" in mv and "from_" not in mv:
             mv["from_"] = mv["from"]
+        
+        # Save board state before move for accurate flag detection
+        board_before = board.copy()
         m = apply_player_move_to_board(board, mv)
 
         # Cập nhật state
-        room["state"]["lastMove"] = move_dict_from_chess_move(m, board)
+        room["state"]["lastMove"] = move_dict_from_chess_move(m, board, board_before)
         room["state"]["boardFEN"] = board.fen()
         room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
         room["lastActive"] = now_ms()
@@ -340,6 +358,7 @@ async def move(sid, payload):
             "sideToMove": room["sideToMove"],
             "state": room["state"],
         }
+        log.info(f"[PVP_GAME] Sending move_applied: {room['state']['lastMove']}")
         await sio.emit("move_applied", response, room=code)
 
     except Exception as e:
@@ -380,9 +399,13 @@ async def move_vs_ai(sid, payload):
             raise ValueError("Room not found")
 
         your_move = None
+        board_before_your_move = None
         if mv is not None:
             if "from" in mv and "from_" not in mv:
                 mv["from_"] = mv["from"]
+            
+            # Save board state before move
+            board_before_your_move = board.copy()
             your_move = apply_player_move_to_board(board, mv)
             
             # Log player move
@@ -392,7 +415,7 @@ async def move_vs_ai(sid, payload):
             log.info(f"[AI_GAME] Player move in {code}: {from_square}-{to_square}{promo_str}")
 
             room["state"]["boardFEN"] = board.fen()
-            room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board)
+            room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board, board_before_your_move)
             room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
             room["lastActive"] = now_ms()
         else:
@@ -441,8 +464,10 @@ async def move_vs_ai(sid, payload):
 
         # 3) Đẩy nước AI vào bàn cờ
         if res.move is not None:
+            # Save board state before AI move
+            board_before_ai_move = board.copy()
             board.push(res.move)
-            ai_move_dict = move_dict_from_chess_move(res.move, board)
+            ai_move_dict = move_dict_from_chess_move(res.move, board, board_before_ai_move)
             
             # Log AI move
             from_square = chess.square_name(res.move.from_square)
@@ -456,8 +481,8 @@ async def move_vs_ai(sid, payload):
         room["state"]["boardFEN"] = board.fen()
         if ai_move_dict is not None:
             room["state"]["lastMove"] = ai_move_dict
-        elif your_move is not None:
-            room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board)
+        elif your_move is not None and board_before_your_move is not None:
+            room["state"]["lastMove"] = move_dict_from_chess_move(your_move, board, board_before_your_move)
         room["sideToMove"] = "WHITE" if board.turn == chess.WHITE else "BLACK"
         room["lastActive"] = now_ms()
 
@@ -469,7 +494,7 @@ async def move_vs_ai(sid, payload):
         log.info(f"[AI_GAME] Sending ai_move response for {code}: next_turn={room['sideToMove']}")
         await sio.emit("ai_move", {
             "code": code,
-            "yourMove": move_dict_from_chess_move(your_move, board) if your_move is not None else None,
+            "yourMove": move_dict_from_chess_move(your_move, board, board_before_your_move) if your_move is not None and board_before_your_move is not None else None,
             "aiMove": ai_move_dict,
             "sideToMove": room["sideToMove"],
             "state": room["state"],
