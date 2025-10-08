@@ -19,11 +19,8 @@ data class AiMoveResult(
 
 class SocketService {
     private var socket: Socket? = null
-    // private val serverUrl = "http://10.0.2.2:4001"
-    private val serverUrl = "https://3ee88ba7d807.ngrok-free.app"
-    // Use "http://localhost:4001" for physical device on same network
-    // or replace with your actual server IP
-    
+    private val serverUrl = SOCKET_URL
+
     // Callbacks for game events
     private var onGameStateUpdateCallback: ((GameState) -> Unit)? = null
     private var onMoveReceivedCallback: ((Move) -> Unit)? = null
@@ -214,7 +211,7 @@ class SocketService {
             val yourMove = parseMoveFromJson(data.optJSONObject("yourMove"))
             val aiMove = parseMoveFromJson(data.optJSONObject("aiMove"))
             val sideToMove = data.optString("sideToMove", null)
-            val gameOverResult = data.optJSONObject("gameOver")?.optString("result")
+            val gameOverResult = data.optJSONObject("gameOver")?.optString("result") ?: ""
 
             val result = AiMoveResult(
                 code = code,
