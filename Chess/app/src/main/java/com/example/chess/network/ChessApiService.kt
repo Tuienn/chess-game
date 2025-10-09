@@ -4,8 +4,13 @@ import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.POST
+import retrofit2.http.Body
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+
+data class CreateRoomRequest(
+    val timeControlMs: Long?
+)
 
 data class CreateRoomResponse(
     val code: String
@@ -13,7 +18,7 @@ data class CreateRoomResponse(
 
 interface ChessApiService {
     @POST("/room")
-    suspend fun createRoom(): Response<CreateRoomResponse>
+    suspend fun createRoom(@Body request: CreateRoomRequest): Response<CreateRoomResponse>
     
     companion object {
         fun create(): ChessApiService {

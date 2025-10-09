@@ -184,6 +184,9 @@ async def emit_room_state(room: RoomState):
         "players": [{"uid": p["uid"], "color": p["color"]} for p in room["players"]],
         "sideToMove": room["sideToMove"],
         "state": room["state"],
+        "timeControlMs": room.get("timeControlMs"),
+        "whiteTimeMs": room.get("whiteTimeMs"),
+        "blackTimeMs": room.get("blackTimeMs")
     }
     await sio.emit("room_state", payload, room=code)
 
@@ -222,8 +225,13 @@ async def remove_membership_and_update_room(sid: str):
 # ----------------------------
 from fastapi import HTTPException
 
+from pydantic import BaseModel
+
+class CreateRoomRequest(BaseModel):
+    timeControlMs: Optional[int] = None
+
 @app.post("/room")
-async def create_room_endpoint():
+async def create_room_endpoint(request: CreateRoomRequest = None):
     # tạo mã code duy nhất
     tries = 0
     code = gen_code()
@@ -232,8 +240,10 @@ async def create_room_endpoint():
         tries += 1
         if tries > 100:
             raise HTTPException(500, "Cannot allocate room code")
-    rooms[code] = create_room(code)
-    log.info(f"[DEBUG] Room created: {code} (total={len(rooms)})")
+    
+    time_control_ms = request.timeControlMs if request else None
+    rooms[code] = create_room(code, time_control_ms)
+    log.info(f"[DEBUG] Room created: {code} with timeControl={time_control_ms}ms (total={len(rooms)})")
     return {"code": code}
 
 # ----------------------------
@@ -281,8 +291,8 @@ async def join_room(sid, payload):
             player = {"uid": uid, "color": color, "socketId": sid}
             room["players"].append(player)
             
-            # Check for AI game indicators
-            is_ai_game = uid.startswith("ai_") or len(room["players"]) == 1
+            # Check for AI game indicators - only if uid starts with "ai_"
+            is_ai_game = uid.startswith("ai_")
             game_type = "AI_GAME" if is_ai_game else "PVP_GAME"
             log.info(f"[{game_type}] Player {uid} joined {code} as {color}")
             

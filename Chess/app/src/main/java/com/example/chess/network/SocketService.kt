@@ -17,6 +17,13 @@ data class AiMoveResult(
     val gameOverResult: String?
 )
 
+data class RoomStateResult(
+    val code: String,
+    val whiteTimeMs: Long?,
+    val blackTimeMs: Long?,
+    val timeControlMs: Long?
+)
+
 class SocketService {
     private var socket: Socket? = null
     private val serverUrl = SOCKET_URL
@@ -29,6 +36,7 @@ class SocketService {
     private var onErrorCallback: ((String) -> Unit)? = null
     private var onAiMoveCallback: ((AiMoveResult) -> Unit)? = null
     private var onTimerUpdateCallback: ((Long?, Long?) -> Unit)? = null // (whiteTimeMs, blackTimeMs)
+    private var onRoomStateCallback: ((RoomStateResult) -> Unit)? = null
     
     companion object {
         private const val TAG = "SocketService"
@@ -172,12 +180,41 @@ class SocketService {
         onTimerUpdateCallback = callback
     }
     
+    fun setOnRoomStateCallback(callback: ((RoomStateResult) -> Unit)?) {
+        onRoomStateCallback = callback
+    }
+    
     // Private event handlers
     private fun handleRoomState(data: JSONObject) {
         try {
             // Parse room state and update game state if needed
-            // For now, just log - server implementation will determine exact format
             Log.d(TAG, "Room state: $data")
+            
+            val code = data.optString("code", "")
+            val whiteTimeMs = if (data.has("whiteTimeMs") && !data.isNull("whiteTimeMs")) {
+                data.getLong("whiteTimeMs")
+            } else null
+            val blackTimeMs = if (data.has("blackTimeMs") && !data.isNull("blackTimeMs")) {
+                data.getLong("blackTimeMs")
+            } else null
+            val timeControlMs = if (data.has("timeControlMs") && !data.isNull("timeControlMs")) {
+                data.getLong("timeControlMs")
+            } else null
+            
+            // Invoke room state callback with full info
+            val roomStateResult = RoomStateResult(
+                code = code,
+                whiteTimeMs = whiteTimeMs,
+                blackTimeMs = blackTimeMs,
+                timeControlMs = timeControlMs
+            )
+            onRoomStateCallback?.invoke(roomStateResult)
+            
+            // Also handle timer update for backwards compatibility
+            if (whiteTimeMs != null || blackTimeMs != null) {
+                onTimerUpdateCallback?.invoke(whiteTimeMs, blackTimeMs)
+                Log.d(TAG, "Timer synced from room_state: white=$whiteTimeMs, black=$blackTimeMs")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling room state", e)
         }
