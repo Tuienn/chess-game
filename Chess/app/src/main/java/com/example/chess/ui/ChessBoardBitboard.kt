@@ -210,15 +210,15 @@ private fun ChessBoardBitboardImpl(
                 }
             }
             
-            // Timer sync callback
+            // Timer sync callback - update timer if server sends timer data
             socketService.setOnTimerUpdateCallback { whiteMs, blackMs ->
-                if (timerEnabled && whiteMs != null && blackMs != null) {
+                if (whiteMs != null && blackMs != null) {
                     playerTimers = PlayerTimers(
                         whiteRemainingMs = whiteMs,
                         blackRemainingMs = blackMs,
                         lastUpdateTimestamp = System.currentTimeMillis()
                     )
-                    Log.d("ChessBoard", "Timer synced: white=$whiteMs, black=$blackMs")
+                    Log.d("ChessBoard", "Timer synced from server: white=$whiteMs, black=$blackMs")
                 }
             }
         }
@@ -278,9 +278,9 @@ private fun ChessBoardBitboardImpl(
         }
     }
 
-    // Timer countdown
-    LaunchedEffect(timerEnabled, gameState.sideToMove, gameEndedOnTime) {
-        if (timerEnabled && playerTimers != null && gameEndedOnTime == null) {
+    // Timer countdown - runs when playerTimers is set (from timeControl prop or server sync)
+    LaunchedEffect(playerTimers, gameState.sideToMove, gameEndedOnTime) {
+        if (playerTimers != null && gameEndedOnTime == null) {
             val status = getGameStatus(gameState)
             if (status != GameStatus.CHECKMATE && status != GameStatus.STALEMATE) {
                 while (playerTimers != null && gameEndedOnTime == null) {
@@ -493,8 +493,8 @@ private fun ChessBoardBitboardImpl(
         ) {
             Spacer(modifier = Modifier.weight(1f))
 
-            // Opponent Timer (top)
-            if (timerEnabled && playerTimers != null) {
+            // Opponent Timer (top) - show if playerTimers is set (from timeControl or server)
+            if (playerTimers != null) {
                 val timers = playerTimers!!
                 val opponentSide = if (playerColor == Side.WHITE) Side.BLACK else Side.WHITE
                 val opponentTime = if (opponentSide == Side.WHITE) timers.whiteRemainingMs else timers.blackRemainingMs
@@ -624,8 +624,8 @@ private fun ChessBoardBitboardImpl(
                 selected?.let { HighlightOrigin(index = it, square = sq, shouldRotateBoard = shouldRotateBoard) }
             }
 
-            // Player Timer (bottom)
-            if (timerEnabled && playerTimers != null) {
+            // Player Timer (bottom) - show if playerTimers is set (from timeControl or server)
+            if (playerTimers != null) {
                 val timers = playerTimers!!
                 val playerTime = if (playerColor == Side.WHITE) timers.whiteRemainingMs else timers.blackRemainingMs
                 ChessTimerDisplay(

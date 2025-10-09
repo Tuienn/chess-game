@@ -110,7 +110,13 @@ fun OnlinePlayModal(
                         errorMessage = null
                         coroutineScope.launch {
                             try {
-                                val response = apiService.createRoom()
+                                val timeControlMs = if (selectedTimeControl.enabled) {
+                                    selectedTimeControl.totalTimeMs
+                                } else {
+                                    null
+                                }
+                                val request = com.example.chess.network.CreateRoomRequest(timeControlMs)
+                                val response = apiService.createRoom(request)
                                 if (response.isSuccessful) {
                                     response.body()?.let { roomResponse ->
                                         onRoomCreated(roomResponse.code, selectedTimeControl)

@@ -178,7 +178,13 @@ class MainActivity : ComponentActivity() {
                                 throw IllegalStateException("Unable to connect to chess server")
                             }
 
-                            val response = apiService.createRoom()
+                            val timeControlMs = if (currentTimeControl?.enabled == true) {
+                                currentTimeControl!!.totalTimeMs
+                            } else {
+                                null
+                            }
+                            val request = com.example.chess.network.CreateRoomRequest(timeControlMs)
+                            val response = apiService.createRoom(request)
                             if (!response.isSuccessful) {
                                 throw IllegalStateException("Failed to create room (${response.code()})")
                             }
